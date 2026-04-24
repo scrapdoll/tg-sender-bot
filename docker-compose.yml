@@ -1,0 +1,21 @@
+services:
+  manager-bot:
+    build: .
+    command: ["tg-spam-agent", "run-manager"]
+    env_file:
+      - .env
+    volumes:
+      - tg_spam_agent_data:/app/data
+    restart: unless-stopped
+
+  sender-userbot:
+    build: .
+    command: ["tg-spam-agent", "run-sender"]
+    env_file:
+      - .env
+    volumes:
+      - tg_spam_agent_data:/app/data
+    restart: unless-stopped
+
+volumes:
+  tg_spam_agent_data:
