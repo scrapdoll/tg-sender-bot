@@ -49,6 +49,8 @@ class SubscriptionTarget(Base):
     source: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     chat_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    topic_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    topic_title: Mapped[str | None] = mapped_column(String(255), nullable=True)
     entity_type: Mapped[str] = mapped_column(String(32), default="unknown")
     access_type: Mapped[str] = mapped_column(String(32), default="unknown")
     is_joined: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

@@ -34,6 +34,7 @@ from tg_spam_agent.repositories import (
     SystemRepository,
 )
 from tg_spam_agent.services.access import AccessService
+from tg_spam_agent.services.datetime_utils import ensure_utc
 from tg_spam_agent.services.source_parser import parse_target_source
 
 logger = logging.getLogger(__name__)
@@ -49,13 +50,19 @@ class ManagerStates(StatesGroup):
 
 
 def _dt(value: datetime | None, tr: Translator) -> str:
-    if value is None:
+    normalized = ensure_utc(value)
+    if normalized is None:
         return tr.t("not_scheduled")
-    return value.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
+    return normalized.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
 
 
 def _subscription_line(target, tr: Translator) -> str:
     title = html.escape(target.title or target.source)
+    topic = (
+        f"\n   topic_id: <code>{target.topic_id}</code>"
+        if target.topic_id is not None
+        else ""
+    )
     error = (
         f"\n   {tr.t('target_error')}: {html.escape(target.last_error)}"
         if target.last_error
@@ -65,6 +72,7 @@ def _subscription_line(target, tr: Translator) -> str:
         f"#{target.id} {title}\n"
         f"   {tr.t('target_source')}: <code>{html.escape(target.source)}</code>\n"
         f"   {tr.t('target_status')}: {target.join_status} | joined={target.is_joined} | enabled={target.is_enabled}"
+        f"{topic}"
         f"{error}"
     )
 
@@ -394,7 +402,11 @@ def create_manager_router(
 
         async with session_factory() as session:
             repo = SubscriptionRepository(session)
-            target = await repo.upsert_target(parsed.normalized, parsed.access_type)
+            target = await repo.upsert_target(
+                parsed.normalized,
+                parsed.access_type,
+                parsed.topic_id,
+            )
         await state.clear()
         await message.answer(
             tr.t(

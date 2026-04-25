@@ -40,8 +40,9 @@ async def test_subscription_repository_upsert_and_retry() -> None:
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
         repo = SubscriptionRepository(session)
-        target = await repo.upsert_target("@publictarget", "public")
+        target = await repo.upsert_target("@publictarget/77", "public_topic", 77)
         assert target.join_status == "pending"
+        assert target.topic_id == 77
 
         updated = await repo.mark_join_result(
             target.id,

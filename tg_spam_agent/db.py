@@ -18,6 +18,17 @@ async def init_database(
     engine = session_factory.kw["bind"]
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        if settings.database_url.startswith("sqlite+aiosqlite:///"):
+            rows = await conn.exec_driver_sql("PRAGMA table_info(subscription_targets)")
+            columns = {row[1] for row in rows}
+            if "topic_id" not in columns:
+                await conn.exec_driver_sql(
+                    "ALTER TABLE subscription_targets ADD COLUMN topic_id INTEGER",
+                )
+            if "topic_title" not in columns:
+                await conn.exec_driver_sql(
+                    "ALTER TABLE subscription_targets ADD COLUMN topic_title VARCHAR(255)",
+                )
 
     async with session_factory() as session:
         system_repo = SystemRepository(session)

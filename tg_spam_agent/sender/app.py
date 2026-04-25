@@ -34,7 +34,7 @@ from tg_spam_agent.repositories import (
     SystemRepository,
 )
 from tg_spam_agent.services.notifications import build_inbound_notification
-from tg_spam_agent.services.scheduler import compute_next_broadcast_time
+from tg_spam_agent.services.scheduler import compute_next_broadcast_time, is_broadcast_due
 from tg_spam_agent.services.source_parser import parse_target_source
 
 logger = logging.getLogger(__name__)
@@ -134,14 +134,16 @@ async def _attempt_join_target(
     parsed = parse_target_source(target.source)
     entity = None
     try:
-        if parsed.access_type == "public":
+        if parsed.access_type in {"public", "public_topic"}:
             entity = await client.get_entity(parsed.lookup_value)
             await client(JoinChannelRequest(entity))
+        elif parsed.access_type == "private_topic":
+            entity = await client.get_entity(int(parsed.lookup_value))
         else:
             updates = await client(ImportChatInviteRequest(parsed.lookup_value))
             entity = updates.chats[0] if getattr(updates, "chats", None) else None
     except UserAlreadyParticipantError:
-        if parsed.access_type == "public":
+        if parsed.access_type in {"public", "public_topic"}:
             entity = await client.get_entity(parsed.lookup_value)
     except InviteRequestSentError as exc:
         async with session_factory() as session:
@@ -227,7 +229,7 @@ async def _run_single_broadcast(
             return
 
         now = datetime.now(timezone.utc)
-        if settings.next_broadcast_at and settings.next_broadcast_at > now:
+        if not is_broadcast_due(settings.next_broadcast_at, now):
             return
 
         message = await message_repo.choose_random_active_message(Random())
@@ -248,7 +250,10 @@ async def _run_single_broadcast(
 
     for target in targets:
         try:
-            await client.send_message(target.chat_id, message.text)
+            send_kwargs = {}
+            if target.topic_id is not None:
+                send_kwargs["reply_to"] = target.topic_id
+            await client.send_message(target.chat_id, message.text, **send_kwargs)
         except (ChatWriteForbiddenError, ChannelPrivateError) as exc:
             async with session_factory() as session:
                 await DeliveryRepository(session).log_delivery(

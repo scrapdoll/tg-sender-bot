@@ -231,7 +231,12 @@ class SubscriptionRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
-    async def upsert_target(self, source: str, access_type: str) -> SubscriptionTarget:
+    async def upsert_target(
+        self,
+        source: str,
+        access_type: str,
+        topic_id: int | None = None,
+    ) -> SubscriptionTarget:
         result = await self.session.scalar(
             select(SubscriptionTarget).where(SubscriptionTarget.source == source)
         )
@@ -239,6 +244,7 @@ class SubscriptionRepository:
             result = SubscriptionTarget(
                 source=source,
                 access_type=access_type,
+                topic_id=topic_id,
                 join_status="pending",
                 is_enabled=True,
                 is_joined=False,
@@ -246,6 +252,7 @@ class SubscriptionRepository:
             self.session.add(result)
         else:
             result.access_type = access_type
+            result.topic_id = topic_id
             result.join_status = "pending"
             result.last_error = None
         await self.session.commit()

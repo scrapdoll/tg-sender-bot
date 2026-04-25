@@ -9,6 +9,7 @@ class ParsedSource:
     normalized: str
     access_type: str
     lookup_value: str
+    topic_id: int | None = None
 
 
 def parse_target_source(raw_text: str) -> ParsedSource:
@@ -55,7 +56,30 @@ def parse_target_source(raw_text: str) -> ParsedSource:
                 lookup_value=invite_hash,
             )
 
-        username = path.split("/", 1)[0]
+        parts = path.split("/")
+        if parts[0] == "c" and len(parts) >= 3:
+            internal_chat_id = parts[1]
+            topic_id = parts[2]
+            if not internal_chat_id.isdigit() or not topic_id.isdigit():
+                raise ValueError("Private topic link must contain numeric chat and topic IDs.")
+            peer_id = int(f"-100{internal_chat_id}")
+            return ParsedSource(
+                normalized=f"c:{internal_chat_id}/{topic_id}",
+                access_type="private_topic",
+                lookup_value=str(peer_id),
+                topic_id=int(topic_id),
+            )
+
+        username = parts[0]
+        if len(parts) >= 2 and parts[1].isdigit():
+            topic_id = int(parts[1])
+            return ParsedSource(
+                normalized=f"@{username.lower()}/{topic_id}",
+                access_type="public_topic",
+                lookup_value=username,
+                topic_id=topic_id,
+            )
+
         return ParsedSource(
             normalized=f"@{username.lower()}",
             access_type="public",
