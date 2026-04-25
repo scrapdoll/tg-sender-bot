@@ -79,6 +79,40 @@ def _extract_title(entity: object) -> str | None:
     return None
 
 
+async def _resolve_broadcast_entity(client: TelegramClient, target) -> object:
+    try:
+        parsed = parse_target_source(target.source)
+    except ValueError:
+        parsed = None
+
+    lookup_candidates: list[object] = []
+    if parsed is not None:
+        if parsed.access_type in {"public", "public_topic"}:
+            lookup_candidates.append(parsed.lookup_value)
+        elif parsed.access_type == "private_topic":
+            lookup_candidates.append(int(parsed.lookup_value))
+    if target.chat_id is not None:
+        lookup_candidates.append(target.chat_id)
+
+    for candidate in lookup_candidates:
+        try:
+            return await client.get_entity(candidate)
+        except (ValueError, TypeError, RPCError):
+            continue
+
+    # Refresh the entity cache after restarts; joined private chats may only
+    # become resolvable once dialogs are loaded.
+    with contextlib.suppress(Exception):
+        await client.get_dialogs()
+        for candidate in lookup_candidates:
+            with contextlib.suppress(Exception):
+                return await client.get_entity(candidate)
+
+    if target.chat_id is None:
+        raise ValueError(f"Target #{target.id} has no chat_id.")
+    return target.chat_id
+
+
 async def _notify_owners(
     bot: Bot, owner_ids: list[int], text: str, *, disable_notification: bool = False
 ) -> None:
@@ -280,6 +314,7 @@ async def _attempt_join_target(
             join_status="joined",
             last_error=None,
         )
+        await SystemRepository(session).update_settings(next_broadcast_at=None)
 
 
 async def _process_pending_joins(
@@ -323,10 +358,16 @@ async def _run_single_broadcast(
         target_repo = SubscriptionRepository(session)
         settings = await system_repo.get_settings()
         if settings is None or not settings.is_active:
+            logger.debug("Broadcast skipped: settings missing or inactive")
             return
 
         now = datetime.now(timezone.utc)
         if not is_broadcast_due(settings.next_broadcast_at, now):
+            logger.debug(
+                "Broadcast skipped: next run is %s, now is %s",
+                settings.next_broadcast_at,
+                now,
+            )
             return
 
         message = await message_repo.choose_random_active_message(Random())
@@ -339,9 +380,10 @@ async def _run_single_broadcast(
         )
 
         if message is None or not targets:
-            await system_repo.update_settings(
-                last_broadcast_at=now,
-                next_broadcast_at=next_run,
+            logger.debug(
+                "Broadcast cycle skipped: active_message=%s enabled_joined_targets=%s",
+                message is not None,
+                len(targets),
             )
             return
 
@@ -350,7 +392,8 @@ async def _run_single_broadcast(
             send_kwargs = {}
             if target.topic_id is not None:
                 send_kwargs["reply_to"] = target.topic_id
-            await client.send_message(target.chat_id, message.text, **send_kwargs)
+            entity = await _resolve_broadcast_entity(client, target)
+            await client.send_message(entity, message.text, **send_kwargs)
         except (ChatWriteForbiddenError, ChannelPrivateError) as exc:
             async with session_factory() as session:
                 await DeliveryRepository(session).log_delivery(
@@ -395,6 +438,7 @@ async def _run_single_broadcast(
                 context=f"target_id={target.id} chat_id={target.chat_id} topic_id={target.topic_id}",
             )
         else:
+            logger.info("Broadcast delivered to target %s", target.id)
             async with session_factory() as session:
                 await DeliveryRepository(session).log_delivery(
                     target_id=target.id,
@@ -407,6 +451,31 @@ async def _run_single_broadcast(
             last_broadcast_at=now,
             next_broadcast_at=next_run,
         )
+
+
+async def _reset_empty_broadcast_schedule(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        system_repo = SystemRepository(session)
+        settings = await system_repo.get_settings()
+        if (
+            settings is None
+            or not settings.is_active
+            or settings.next_broadcast_at is None
+        ):
+            return
+        if settings.last_broadcast_at is None:
+            await system_repo.update_settings(next_broadcast_at=None)
+            return
+        has_success = await DeliveryRepository(session).has_success_since(
+            settings.last_broadcast_at
+        )
+        if not has_success:
+            logger.info(
+                "Resetting broadcast schedule because the previous due cycle had no successful deliveries"
+            )
+            await system_repo.update_settings(next_broadcast_at=None)
 
 
 async def _sender_loop(
@@ -458,6 +527,7 @@ async def run_sender_userbot(
         )
 
     logger.info("Sender userbot connected")
+    await _reset_empty_broadcast_schedule(session_factory)
     debug_notifier = SenderDebugNotifier(bot, session_factory, settings)
     sender_task = asyncio.create_task(
         _sender_loop(client, bot, session_factory, settings, debug_notifier),

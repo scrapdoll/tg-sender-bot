@@ -390,6 +390,17 @@ class DeliveryRepository:
         )
         return list(result)
 
+    async def has_success_since(self, since: datetime) -> bool:
+        result = await self.session.scalar(
+            select(DeliveryLog.id)
+            .where(
+                DeliveryLog.success.is_(True),
+                DeliveryLog.attempted_at >= since,
+            )
+            .limit(1)
+        )
+        return result is not None
+
 
 class InboundRepository:
     def __init__(self, session: AsyncSession) -> None:

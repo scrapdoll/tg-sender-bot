@@ -297,7 +297,7 @@ async def _show_inbound_users(
         f"{tr.t('inbound_users_hint')}\n\n"
         + "\n\n".join(lines)
     )
-    markup = build_inbound_users_keyboard(tr)
+    markup = build_inbound_users_keyboard(summaries, tr)
     if isinstance(target, CallbackQuery):
         await _safe_edit(target, text, markup)
         await target.answer()
@@ -547,7 +547,9 @@ def create_manager_router(
         target_id = int(callback.data.split(":")[1])
         async with session_factory() as session:
             repo = SubscriptionRepository(session)
-            await repo.toggle_enabled(target_id)
+            target = await repo.toggle_enabled(target_id)
+            if target is not None and target.is_enabled and target.is_joined:
+                await SystemRepository(session).update_settings(next_broadcast_at=None)
         await _show_subscription_detail(callback, session_factory, tr, target_id)
 
     @router.callback_query(F.data.startswith("sub_retry:"))
@@ -589,6 +591,7 @@ def create_manager_router(
         async with session_factory() as session:
             repo = MessageRepository(session)
             created = await repo.create_message(message.text, message.from_user.id)
+            await SystemRepository(session).update_settings(next_broadcast_at=None)
         await state.clear()
         await message.answer(tr.t("message_saved", id=created.id))
         await _show_messages(message, session_factory, tr)
@@ -600,7 +603,9 @@ def create_manager_router(
         tr = await _get_translator(session_factory, callback.from_user.id)
         message_id = int(callback.data.split(":")[1])
         async with session_factory() as session:
-            await MessageRepository(session).toggle_message(message_id)
+            message = await MessageRepository(session).toggle_message(message_id)
+            if message is not None and message.is_enabled:
+                await SystemRepository(session).update_settings(next_broadcast_at=None)
         await _show_messages(callback, session_factory, tr)
 
     @router.callback_query(F.data.startswith("msg_delete:"))
@@ -696,18 +701,9 @@ def create_manager_router(
             repo = SystemRepository(session)
             current = await repo.get_settings()
             will_activate = not current.is_active
-            next_run = (
-                compute_next_broadcast_time(
-                    now=datetime.now(timezone.utc),
-                    base_interval_minutes=current.base_interval_minutes,
-                    jitter_minutes=current.jitter_minutes,
-                )
-                if will_activate
-                else current.next_broadcast_at
-            )
             await repo.update_settings(
                 is_active=will_activate,
-                next_broadcast_at=next_run,
+                next_broadcast_at=None if will_activate else current.next_broadcast_at,
             )
         await _show_schedule(callback, session_factory, tr)
 

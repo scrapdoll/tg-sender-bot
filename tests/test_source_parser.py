@@ -57,8 +57,25 @@ def test_parse_private_forum_topic_link() -> None:
     assert parsed.topic_id == 42
 
 
+def test_parse_normalized_private_forum_topic_source() -> None:
+    parsed = parse_target_source("c:1234567890/42")
+
+    assert parsed.normalized == "c:1234567890/42"
+    assert parsed.access_type == "private_topic"
+    assert parsed.lookup_value == "-1001234567890"
+    assert parsed.topic_id == 42
+
+
 def test_parse_private_invite() -> None:
     parsed = parse_target_source("https://t.me/+AbCdEf123")
+
+    assert parsed.normalized == "invite:AbCdEf123"
+    assert parsed.access_type == "private_invite"
+    assert parsed.lookup_value == "AbCdEf123"
+
+
+def test_parse_normalized_private_invite_source() -> None:
+    parsed = parse_target_source("invite:AbCdEf123")
 
     assert parsed.normalized == "invite:AbCdEf123"
     assert parsed.access_type == "private_invite"

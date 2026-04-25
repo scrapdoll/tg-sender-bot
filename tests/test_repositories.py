@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from tg_spam_agent.models import Base
 from tg_spam_agent.repositories import (
+    DeliveryRepository,
     InboundRepository,
     MessageRepository,
     SubscriptionRepository,
@@ -144,3 +145,28 @@ async def test_inbound_repository_lists_unique_sender_summaries() -> None:
         assert summaries[0].message_count == 2
         assert summaries[0].event.message_preview == "latest message"
         assert summaries[1].message_count == 1
+
+
+async def test_delivery_repository_detects_success_since_timestamp() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        message = await MessageRepository(session).create_message("hello", created_by=1)
+        target = await SubscriptionRepository(session).upsert_target(
+            "@publictarget",
+            "public",
+        )
+        repo = DeliveryRepository(session)
+        before_success = datetime.now(timezone.utc)
+        assert await repo.has_success_since(before_success) is False
+
+        await repo.log_delivery(
+            target_id=target.id,
+            message_template_id=message.id,
+            success=True,
+        )
+
+        assert await repo.has_success_since(before_success) is True

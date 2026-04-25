@@ -5,6 +5,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from tg_spam_agent.manager.i18n import Translator
 from tg_spam_agent.models import BroadcastSettings, MessageTemplate, SubscriptionTarget
+from tg_spam_agent.repositories import InboundSenderSummary
 
 
 def _shorten(text: str, limit: int = 24) -> str:
@@ -112,12 +113,34 @@ def build_whitelist_keyboard(tr: Translator) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def build_inbound_users_keyboard(tr: Translator) -> InlineKeyboardMarkup:
+def build_inbound_users_keyboard(
+    summaries: list[InboundSenderSummary],
+    tr: Translator,
+) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
+    for summary in summaries:
+        builder.button(
+            text=_inbound_user_button_label(summary, tr),
+            url=_inbound_user_url(summary),
+        )
     builder.button(text=tr.t("btn_refresh"), callback_data="menu:inbound_users")
     builder.button(text=tr.t("btn_back"), callback_data="menu:main")
-    builder.adjust(2)
+    builder.adjust(*([1] * len(summaries)), 2)
     return builder.as_markup()
+
+
+def _inbound_user_button_label(summary: InboundSenderSummary, tr: Translator) -> str:
+    event = summary.event
+    label = event.full_name or (f"@{event.username}" if event.username else None)
+    if not label:
+        label = f"{tr.t('inbound_unknown_user')} {event.sender_id}"
+    return f"{_shorten(label, 36)} ({summary.message_count})"
+
+
+def _inbound_user_url(summary: InboundSenderSummary) -> str:
+    if summary.event.username:
+        return f"https://t.me/{summary.event.username}"
+    return f"tg://user?id={summary.event.sender_id}"
 
 
 def build_language_keyboard(tr: Translator) -> InlineKeyboardMarkup:

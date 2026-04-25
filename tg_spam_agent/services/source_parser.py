@@ -53,6 +53,29 @@ def parse_target_source(raw_text: str) -> ParsedSource:
     if value.startswith("@"):
         return _parse_public_source(value)
 
+    if value.startswith("invite:"):
+        invite_hash = value.removeprefix("invite:").strip()
+        if not invite_hash:
+            raise ValueError("Invite hash is empty.")
+        return ParsedSource(
+            normalized=f"invite:{invite_hash}",
+            access_type="private_invite",
+            lookup_value=invite_hash,
+        )
+
+    if value.startswith("c:"):
+        path = value.removeprefix("c:").strip()
+        parts = path.split("/")
+        if len(parts) < 2 or not parts[0].isdigit() or not parts[1].isdigit():
+            raise ValueError("Private topic source must contain numeric chat and topic IDs.")
+        peer_id = int(f"-100{parts[0]}")
+        return ParsedSource(
+            normalized=f"c:{parts[0]}/{parts[1]}",
+            access_type="private_topic",
+            lookup_value=str(peer_id),
+            topic_id=int(parts[1]),
+        )
+
     if value.startswith("http://") or value.startswith("https://"):
         parsed = urlparse(value)
         if parsed.netloc not in {"t.me", "telegram.me", "www.t.me"}:
