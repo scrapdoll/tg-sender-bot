@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from urllib.parse import urlparse
 
 
@@ -10,6 +11,10 @@ class ParsedSource:
     access_type: str
     lookup_value: str
     topic_id: int | None = None
+
+
+def split_target_sources(raw_text: str) -> list[str]:
+    return [item for item in re.split(r"[\s,]+", raw_text.strip()) if item]
 
 
 def _parse_public_source(value: str) -> ParsedSource:

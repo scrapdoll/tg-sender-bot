@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from tg_spam_agent.services.source_parser import parse_target_source
+from tg_spam_agent.services.source_parser import parse_target_source, split_target_sources
 
 
 def test_parse_username_source() -> None:
@@ -68,3 +68,14 @@ def test_parse_private_invite() -> None:
 def test_parse_invalid_source() -> None:
     with pytest.raises(ValueError):
         parse_target_source("https://example.com/nope")
+
+
+def test_split_target_sources_by_space_comma_and_newline() -> None:
+    raw = "@one, @two\nhttps://t.me/three/4   https://t.me/+invite"
+
+    assert split_target_sources(raw) == [
+        "@one",
+        "@two",
+        "https://t.me/three/4",
+        "https://t.me/+invite",
+    ]

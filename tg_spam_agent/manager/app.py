@@ -35,7 +35,7 @@ from tg_spam_agent.repositories import (
 )
 from tg_spam_agent.services.access import AccessService
 from tg_spam_agent.services.datetime_utils import ensure_utc
-from tg_spam_agent.services.source_parser import parse_target_source
+from tg_spam_agent.services.source_parser import parse_target_source, split_target_sources
 
 logger = logging.getLogger(__name__)
 
@@ -394,27 +394,59 @@ def create_manager_router(
         if not await _ensure_message_access(message, session_factory):
             return
         tr = await _get_translator(session_factory, message.from_user.id)
-        try:
-            parsed = parse_target_source(message.text)
-        except ValueError as exc:
-            await message.answer(tr.t("invalid_target", error=exc))
+        sources = split_target_sources(message.text)
+        if not sources:
+            await message.answer(tr.t("invalid_target", error="empty input"))
             return
 
+        created_targets = []
+        failed_sources: list[tuple[str, str]] = []
         async with session_factory() as session:
             repo = SubscriptionRepository(session)
-            target = await repo.upsert_target(
-                parsed.normalized,
-                parsed.access_type,
-                parsed.topic_id,
+            for source in sources:
+                try:
+                    parsed = parse_target_source(source)
+                except ValueError as exc:
+                    failed_sources.append((source, str(exc)))
+                    continue
+                created_targets.append(
+                    await repo.upsert_target(
+                        parsed.normalized,
+                        parsed.access_type,
+                        parsed.topic_id,
+                    )
+                )
+
+        if not created_targets:
+            await message.answer(
+                "\n".join(
+                    tr.t("invalid_target", error=f"{source}: {error}")
+                    for source, error in failed_sources
+                )
             )
+            return
+
         await state.clear()
-        await message.answer(
+        queued_lines = [
             tr.t(
-                "target_queued",
+                "target_queued_line",
                 id=target.id,
                 source=html.escape(target.source),
             )
-        )
+            for target in created_targets
+        ]
+        response = [tr.t("targets_queued_summary", count=len(created_targets))]
+        if failed_sources:
+            response.extend(
+                tr.t(
+                    "target_failed_line",
+                    source=html.escape(source),
+                    error=html.escape(error),
+                )
+                for source, error in failed_sources
+            )
+        response.extend(queued_lines)
+        await message.answer("\n".join(response))
         await _show_subscriptions(message, session_factory, tr)
 
     @router.callback_query(F.data.startswith("sub_toggle:"))
