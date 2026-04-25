@@ -16,10 +16,11 @@ def build_main_keyboard(tr: Translator) -> InlineKeyboardMarkup:
     builder.button(text=tr.t("btn_targets"), callback_data="menu:subscriptions")
     builder.button(text=tr.t("btn_messages"), callback_data="menu:messages")
     builder.button(text=tr.t("btn_schedule"), callback_data="menu:schedule")
+    builder.button(text=tr.t("btn_inbound_users"), callback_data="menu:inbound_users")
     builder.button(text=tr.t("btn_whitelist"), callback_data="menu:whitelist")
     builder.button(text=tr.t("btn_status"), callback_data="menu:status")
     builder.button(text=tr.t("btn_language"), callback_data="menu:language")
-    builder.adjust(2, 2, 2)
+    builder.adjust(2, 2, 2, 1)
     return builder.as_markup()
 
 
@@ -31,22 +32,36 @@ def build_subscriptions_keyboard(
     builder.button(text=tr.t("btn_add_target"), callback_data="sub:add")
     builder.button(text=tr.t("btn_refresh"), callback_data="menu:subscriptions")
     for target in targets:
-        label = _shorten(target.title or target.source)
+        label = _target_button_label(target)
         builder.button(
-            text=f"{tr.t('btn_disable') if target.is_enabled else tr.t('btn_enable')} #{target.id}",
-            callback_data=f"sub_toggle:{target.id}",
+            text=label,
+            callback_data=f"sub_view:{target.id}",
         )
-        builder.button(
-            text=f"{tr.t('btn_retry')} #{target.id}",
-            callback_data=f"sub_retry:{target.id}",
-        )
-        builder.button(
-            text=f"{tr.t('btn_delete')} #{target.id}",
-            callback_data=f"sub_delete:{target.id}",
-        )
-        builder.button(text=f"Info: {label}", callback_data="noop")
     builder.button(text=tr.t("btn_back"), callback_data="menu:main")
-    builder.adjust(2, 1, 1, repeat=True)
+    builder.adjust(2, repeat=True)
+    return builder.as_markup()
+
+
+def _target_button_label(target: SubscriptionTarget) -> str:
+    status = "on" if target.is_enabled else "off"
+    joined = "ok" if target.is_joined else target.join_status
+    label = _shorten(target.title or target.source, 34)
+    return f"#{target.id} {label} [{status}/{joined}]"
+
+
+def build_subscription_detail_keyboard(
+    target: SubscriptionTarget,
+    tr: Translator,
+) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text=tr.t("btn_disable") if target.is_enabled else tr.t("btn_enable"),
+        callback_data=f"sub_toggle:{target.id}",
+    )
+    builder.button(text=tr.t("btn_retry"), callback_data=f"sub_retry:{target.id}")
+    builder.button(text=tr.t("btn_delete"), callback_data=f"sub_delete:{target.id}")
+    builder.button(text=tr.t("btn_back"), callback_data="menu:subscriptions")
+    builder.adjust(2, 1, 1)
     return builder.as_markup()
 
 
@@ -94,6 +109,14 @@ def build_whitelist_keyboard(tr: Translator) -> InlineKeyboardMarkup:
     builder.button(text=tr.t("btn_refresh"), callback_data="menu:whitelist")
     builder.button(text=tr.t("btn_back"), callback_data="menu:main")
     builder.adjust(2, 1, 1)
+    return builder.as_markup()
+
+
+def build_inbound_users_keyboard(tr: Translator) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text=tr.t("btn_refresh"), callback_data="menu:inbound_users")
+    builder.button(text=tr.t("btn_back"), callback_data="menu:main")
+    builder.adjust(2)
     return builder.as_markup()
 
 

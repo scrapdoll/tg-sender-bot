@@ -18,15 +18,18 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from tg_spam_agent.config import Settings
 from tg_spam_agent.manager.i18n import Translator
 from tg_spam_agent.manager.keyboards import (
+    build_inbound_users_keyboard,
     build_language_keyboard,
     build_main_keyboard,
     build_messages_keyboard,
     build_schedule_keyboard,
+    build_subscription_detail_keyboard,
     build_subscriptions_keyboard,
     build_whitelist_keyboard,
 )
 from tg_spam_agent.repositories import (
     AccessRepository,
+    InboundRepository,
     ManagerPreferenceRepository,
     MessageRepository,
     StatusRepository,
@@ -35,6 +38,7 @@ from tg_spam_agent.repositories import (
 )
 from tg_spam_agent.services.access import AccessService
 from tg_spam_agent.services.datetime_utils import ensure_utc
+from tg_spam_agent.services.scheduler import compute_next_broadcast_time
 from tg_spam_agent.services.source_parser import parse_target_source, split_target_sources
 
 logger = logging.getLogger(__name__)
@@ -86,6 +90,24 @@ def _failure_line(failure, tr: Translator) -> str:
     when = _dt(failure.attempted_at, tr)
     error = html.escape(failure.error or "unknown error")
     return f"target #{failure.target_id} at {when}: {error}"
+
+
+def _inbound_sender_line(summary, tr: Translator) -> str:
+    event = summary.event
+    display_name = event.full_name or (
+        f"@{event.username}" if event.username else tr.t("inbound_unknown_user")
+    )
+    username = f"@{event.username}" if event.username else "-"
+    preview = html.escape((event.message_preview or "").replace("\n", " ")[:160])
+    if not preview:
+        preview = "-"
+    return (
+        f"<b>{html.escape(display_name)}</b>\n"
+        f"   ID: <code>{event.sender_id}</code> | username: {html.escape(username)}\n"
+        f"   {tr.t('inbound_messages_count')}: {summary.message_count} | "
+        f"{tr.t('inbound_last_seen')}: {_dt(event.received_at, tr)}\n"
+        f"   {tr.t('inbound_last_preview')}: {preview}"
+    )
 
 
 def _session_status(settings: Settings, tr: Translator) -> str:
@@ -160,14 +182,39 @@ async def _show_subscriptions(
         repo = SubscriptionRepository(session)
         targets = await repo.list_targets()
 
-    lines = [_subscription_line(item, tr) for item in targets] or [tr.t("targets_empty")]
-    text = f"{tr.t('targets_title')}\n{tr.t('targets_hint')}\n\n" + "\n\n".join(lines)
+    if targets:
+        text = (
+            f"{tr.t('targets_title')}\n"
+            f"{tr.t('targets_hint')}\n\n"
+            f"{tr.t('targets_list_hint', count=len(targets))}"
+        )
+    else:
+        text = f"{tr.t('targets_title')}\n{tr.t('targets_hint')}\n\n{tr.t('targets_empty')}"
     markup = build_subscriptions_keyboard(targets, tr)
     if isinstance(target, CallbackQuery):
         await _safe_edit(target, text, markup)
         await target.answer()
     else:
         await target.answer(text, reply_markup=markup)
+
+
+async def _show_subscription_detail(
+    callback: CallbackQuery,
+    session_factory: async_sessionmaker[AsyncSession],
+    tr: Translator,
+    target_id: int,
+) -> None:
+    async with session_factory() as session:
+        target = await SubscriptionRepository(session).get_target(target_id)
+
+    if target is None:
+        await callback.answer(tr.t("target_not_found"), show_alert=True)
+        await _show_subscriptions(callback, session_factory, tr)
+        return
+
+    text = f"{tr.t('target_details_title')}\n\n{_subscription_line(target, tr)}"
+    await _safe_edit(callback, text, build_subscription_detail_keyboard(target, tr))
+    await callback.answer()
 
 
 async def _show_messages(
@@ -225,6 +272,32 @@ async def _show_whitelist(
     lines = [f"<code>{item.user_id}</code>" for item in entries] or [tr.t("whitelist_empty")]
     text = "<b>Whitelist</b>\n\n" + "\n".join(lines)
     markup = build_whitelist_keyboard(tr)
+    if isinstance(target, CallbackQuery):
+        await _safe_edit(target, text, markup)
+        await target.answer()
+    else:
+        await target.answer(text, reply_markup=markup)
+
+
+async def _show_inbound_users(
+    target: Message | CallbackQuery,
+    session_factory: async_sessionmaker[AsyncSession],
+    tr: Translator,
+) -> None:
+    async with session_factory() as session:
+        summaries = await InboundRepository(session).list_sender_summaries()
+
+    lines = (
+        [_inbound_sender_line(summary, tr) for summary in summaries]
+        if summaries
+        else [tr.t("inbound_users_empty")]
+    )
+    text = (
+        f"{tr.t('inbound_users_title')}\n"
+        f"{tr.t('inbound_users_hint')}\n\n"
+        + "\n\n".join(lines)
+    )
+    markup = build_inbound_users_keyboard(tr)
     if isinstance(target, CallbackQuery):
         await _safe_edit(target, text, markup)
         await target.answer()
@@ -351,6 +424,14 @@ def create_manager_router(
         tr = await _get_translator(session_factory, callback.from_user.id)
         await _show_whitelist(callback, session_factory, tr)
 
+    @router.callback_query(F.data == "menu:inbound_users")
+    async def menu_inbound_users(callback: CallbackQuery, state: FSMContext) -> None:
+        if not await _ensure_callback_access(callback, session_factory):
+            return
+        await state.clear()
+        tr = await _get_translator(session_factory, callback.from_user.id)
+        await _show_inbound_users(callback, session_factory, tr)
+
     @router.callback_query(F.data == "menu:status")
     async def menu_status(callback: CallbackQuery, state: FSMContext) -> None:
         if not await _ensure_callback_access(callback, session_factory):
@@ -388,6 +469,15 @@ def create_manager_router(
         await state.set_state(ManagerStates.waiting_subscription_source)
         await callback.message.answer(tr.t("send_target"))
         await callback.answer()
+
+    @router.callback_query(F.data.startswith("sub_view:"))
+    async def view_subscription(callback: CallbackQuery, state: FSMContext) -> None:
+        if not await _ensure_callback_access(callback, session_factory):
+            return
+        await state.clear()
+        tr = await _get_translator(session_factory, callback.from_user.id)
+        target_id = int(callback.data.split(":")[1])
+        await _show_subscription_detail(callback, session_factory, tr, target_id)
 
     @router.message(ManagerStates.waiting_subscription_source, F.text)
     async def subscription_source(message: Message, state: FSMContext) -> None:
@@ -458,7 +548,7 @@ def create_manager_router(
         async with session_factory() as session:
             repo = SubscriptionRepository(session)
             await repo.toggle_enabled(target_id)
-        await _show_subscriptions(callback, session_factory, tr)
+        await _show_subscription_detail(callback, session_factory, tr, target_id)
 
     @router.callback_query(F.data.startswith("sub_retry:"))
     async def retry_subscription(callback: CallbackQuery) -> None:
@@ -469,7 +559,7 @@ def create_manager_router(
         async with session_factory() as session:
             repo = SubscriptionRepository(session)
             await repo.queue_retry(target_id)
-        await _show_subscriptions(callback, session_factory, tr)
+        await _show_subscription_detail(callback, session_factory, tr, target_id)
 
     @router.callback_query(F.data.startswith("sub_delete:"))
     async def delete_subscription(callback: CallbackQuery) -> None:
@@ -543,7 +633,18 @@ def create_manager_router(
             await message.answer(tr.t("invalid_interval"))
             return
         async with session_factory() as session:
-            await SystemRepository(session).update_settings(base_interval_minutes=value)
+            repo = SystemRepository(session)
+            current = await repo.get_settings()
+            jitter = current.jitter_minutes if current else settings.default_jitter_minutes
+            next_run = compute_next_broadcast_time(
+                now=datetime.now(timezone.utc),
+                base_interval_minutes=value,
+                jitter_minutes=jitter,
+            )
+            await repo.update_settings(
+                base_interval_minutes=value,
+                next_broadcast_at=next_run,
+            )
         await state.clear()
         await _show_schedule(message, session_factory, tr)
 
@@ -567,7 +668,22 @@ def create_manager_router(
             await message.answer(tr.t("invalid_jitter"))
             return
         async with session_factory() as session:
-            await SystemRepository(session).update_settings(jitter_minutes=value)
+            repo = SystemRepository(session)
+            current = await repo.get_settings()
+            interval = (
+                current.base_interval_minutes
+                if current
+                else settings.default_interval_minutes
+            )
+            next_run = compute_next_broadcast_time(
+                now=datetime.now(timezone.utc),
+                base_interval_minutes=interval,
+                jitter_minutes=value,
+            )
+            await repo.update_settings(
+                jitter_minutes=value,
+                next_broadcast_at=next_run,
+            )
         await state.clear()
         await _show_schedule(message, session_factory, tr)
 
@@ -579,7 +695,20 @@ def create_manager_router(
         async with session_factory() as session:
             repo = SystemRepository(session)
             current = await repo.get_settings()
-            await repo.update_settings(is_active=not current.is_active)
+            will_activate = not current.is_active
+            next_run = (
+                compute_next_broadcast_time(
+                    now=datetime.now(timezone.utc),
+                    base_interval_minutes=current.base_interval_minutes,
+                    jitter_minutes=current.jitter_minutes,
+                )
+                if will_activate
+                else current.next_broadcast_at
+            )
+            await repo.update_settings(
+                is_active=will_activate,
+                next_broadcast_at=next_run,
+            )
         await _show_schedule(callback, session_factory, tr)
 
     @router.callback_query(F.data == "wl:add")

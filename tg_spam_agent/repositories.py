@@ -20,6 +20,9 @@ from tg_spam_agent.models import (
 )
 
 
+_UNSET = object()
+
+
 class SystemRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -57,8 +60,8 @@ class SystemRepository:
         base_interval_minutes: int | None = None,
         jitter_minutes: int | None = None,
         is_active: bool | None = None,
-        next_broadcast_at: datetime | None = None,
-        last_broadcast_at: datetime | None = None,
+        next_broadcast_at: datetime | None | object = _UNSET,
+        last_broadcast_at: datetime | None | object = _UNSET,
     ) -> BroadcastSettings:
         settings = await self.session.get(BroadcastSettings, 1)
         if settings is None:
@@ -71,8 +74,9 @@ class SystemRepository:
             settings.jitter_minutes = jitter_minutes
         if is_active is not None:
             settings.is_active = is_active
-        if next_broadcast_at is not None or last_broadcast_at is not None:
+        if next_broadcast_at is not _UNSET:
             settings.next_broadcast_at = next_broadcast_at
+        if last_broadcast_at is not _UNSET:
             settings.last_broadcast_at = last_broadcast_at
 
         await self.session.commit()
@@ -391,6 +395,33 @@ class InboundRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
+    async def has_events_from_sender(self, sender_id: int) -> bool:
+        existing_id = await self.session.scalar(
+            select(InboundEvent.id).where(InboundEvent.sender_id == sender_id).limit(1)
+        )
+        return existing_id is not None
+
+    async def list_sender_summaries(self, limit: int = 50) -> list[InboundSenderSummary]:
+        latest_by_sender = (
+            select(
+                InboundEvent.sender_id.label("sender_id"),
+                func.max(InboundEvent.id).label("latest_id"),
+                func.count(InboundEvent.id).label("message_count"),
+            )
+            .group_by(InboundEvent.sender_id)
+            .subquery()
+        )
+        result = await self.session.execute(
+            select(InboundEvent, latest_by_sender.c.message_count)
+            .join(latest_by_sender, InboundEvent.id == latest_by_sender.c.latest_id)
+            .order_by(InboundEvent.received_at.desc())
+            .limit(limit)
+        )
+        return [
+            InboundSenderSummary(event=event, message_count=message_count)
+            for event, message_count in result.all()
+        ]
+
     async def log_inbound_event(
         self,
         *,
@@ -410,6 +441,12 @@ class InboundRepository:
         self.session.add(event)
         await self.session.commit()
         return event
+
+
+@dataclass(slots=True)
+class InboundSenderSummary:
+    event: InboundEvent
+    message_count: int
 
 
 @dataclass(slots=True)

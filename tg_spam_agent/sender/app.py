@@ -91,7 +91,15 @@ async def _notify_owners(
             logger.warning("Failed to notify owner %s: %s", owner_id, exc)
 
 
+async def _mark_inbound_as_read(client: TelegramClient, event) -> None:
+    try:
+        await client.send_read_acknowledge(event.chat_id, max_id=event.message.id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to mark inbound message as read: %s", exc)
+
+
 async def _process_inbound_event(
+    client: TelegramClient,
     event,
     bot: Bot,
     session_factory: async_sessionmaker[AsyncSession],
@@ -109,6 +117,9 @@ async def _process_inbound_event(
     async with session_factory() as session:
         inbound_repo = InboundRepository(session)
         system_repo = SystemRepository(session)
+        already_notified_sender = await inbound_repo.has_events_from_sender(
+            event.sender_id
+        )
         inbound = await inbound_repo.log_inbound_event(
             sender_id=event.sender_id,
             username=getattr(sender, "username", None),
@@ -116,9 +127,16 @@ async def _process_inbound_event(
             message_preview=preview,
             message_type=message_type,
         )
-        owner_ids = await system_repo.list_owner_ids()
+        owner_ids = (
+            []
+            if already_notified_sender
+            else await system_repo.list_owner_ids()
+        )
 
-    await _notify_owners(bot, owner_ids, build_inbound_notification(inbound))
+    await _mark_inbound_as_read(client, event)
+
+    if owner_ids:
+        await _notify_owners(bot, owner_ids, build_inbound_notification(inbound))
 
 
 async def _attempt_join_target(
@@ -403,7 +421,7 @@ async def _sender_loop(
 
     @client.on(events.NewMessage(incoming=True))
     async def on_new_message(event) -> None:
-        await _process_inbound_event(event, bot, session_factory, self_id)
+        await _process_inbound_event(client, event, bot, session_factory, self_id)
 
     while True:
         try:
