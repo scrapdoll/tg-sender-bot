@@ -21,6 +21,10 @@ def _sqlite_url(path: Path) -> str:
     return f"sqlite+aiosqlite:///{path.resolve().as_posix()}"
 
 
+def _parse_bool(value: str) -> bool:
+    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
 @dataclass(slots=True)
 class Settings:
     manager_bot_token: str
@@ -33,6 +37,8 @@ class Settings:
     scheduler_poll_seconds: int
     default_interval_minutes: int
     default_jitter_minutes: int
+    sender_debug_errors_to_chat: bool
+    sender_debug_error_cooldown_seconds: int
 
     @classmethod
     def load(cls) -> "Settings":
@@ -57,6 +63,12 @@ class Settings:
                 os.getenv("DEFAULT_INTERVAL_MINUTES", "60")
             ),
             default_jitter_minutes=int(os.getenv("DEFAULT_JITTER_MINUTES", "10")),
+            sender_debug_errors_to_chat=_parse_bool(
+                os.getenv("SENDER_DEBUG_ERRORS_TO_CHAT", "false")
+            ),
+            sender_debug_error_cooldown_seconds=int(
+                os.getenv("SENDER_DEBUG_ERROR_COOLDOWN_SECONDS", "300")
+            ),
         )
 
     def ensure_runtime_dirs(self) -> None:

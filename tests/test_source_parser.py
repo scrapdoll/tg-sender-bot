@@ -30,6 +30,24 @@ def test_parse_public_forum_topic_link() -> None:
     assert parsed.topic_id == 123
 
 
+def test_parse_at_username_forum_topic_source() -> None:
+    parsed = parse_target_source("@sbtgifts/33229")
+
+    assert parsed.normalized == "@sbtgifts/33229"
+    assert parsed.access_type == "public_topic"
+    assert parsed.lookup_value == "sbtgifts"
+    assert parsed.topic_id == 33229
+
+
+def test_parse_bare_username_forum_topic_source() -> None:
+    parsed = parse_target_source("sbtgifts/33229")
+
+    assert parsed.normalized == "@sbtgifts/33229"
+    assert parsed.access_type == "public_topic"
+    assert parsed.lookup_value == "sbtgifts"
+    assert parsed.topic_id == 33229
+
+
 def test_parse_private_forum_topic_link() -> None:
     parsed = parse_target_source("https://t.me/c/1234567890/42")
 

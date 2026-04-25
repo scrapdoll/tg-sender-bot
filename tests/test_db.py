@@ -18,6 +18,8 @@ async def test_init_database_adds_topic_columns_to_existing_sqlite_table() -> No
         scheduler_poll_seconds=15,
         default_interval_minutes=60,
         default_jitter_minutes=10,
+        sender_debug_errors_to_chat=False,
+        sender_debug_error_cooldown_seconds=300,
     )
     session_factory = create_session_factory(settings)
 

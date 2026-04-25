@@ -33,6 +33,7 @@ from tg_spam_agent.repositories import (
     SubscriptionRepository,
     SystemRepository,
 )
+from tg_spam_agent.services.debug_notifications import SenderDebugNotifier
 from tg_spam_agent.services.notifications import build_inbound_notification
 from tg_spam_agent.services.scheduler import compute_next_broadcast_time, is_broadcast_due
 from tg_spam_agent.services.source_parser import parse_target_source
@@ -124,6 +125,7 @@ async def _attempt_join_target(
     client: TelegramClient,
     session_factory: async_sessionmaker[AsyncSession],
     target_id: int,
+    debug_notifier: SenderDebugNotifier,
 ) -> None:
     async with session_factory() as session:
         repo = SubscriptionRepository(session)
@@ -131,7 +133,26 @@ async def _attempt_join_target(
         if target is None:
             return
 
-    parsed = parse_target_source(target.source)
+    try:
+        parsed = parse_target_source(target.source)
+    except ValueError as exc:
+        async with session_factory() as session:
+            await SubscriptionRepository(session).mark_join_result(
+                target_id,
+                chat_id=None,
+                title=None,
+                entity_type="unknown",
+                is_joined=False,
+                join_status="error",
+                last_error=str(exc),
+            )
+        await debug_notifier.notify(
+            "join target parse",
+            exc,
+            context=f"target_id={target_id} source={target.source}",
+        )
+        return
+
     entity = None
     try:
         if parsed.access_type in {"public", "public_topic"}:
@@ -156,8 +177,13 @@ async def _attempt_join_target(
                 join_status="approval_pending",
                 last_error=str(exc),
             )
+        await debug_notifier.notify(
+            "join target approval pending",
+            exc,
+            context=f"target_id={target_id} source={target.source}",
+        )
         return
-    except (ChannelPrivateError, InviteHashExpiredError, UsernameInvalidError, UsernameNotOccupiedError) as exc:
+    except (ValueError, ChannelPrivateError, InviteHashExpiredError, UsernameInvalidError, UsernameNotOccupiedError) as exc:
         async with session_factory() as session:
             await SubscriptionRepository(session).mark_join_result(
                 target_id,
@@ -168,6 +194,11 @@ async def _attempt_join_target(
                 join_status="error",
                 last_error=str(exc),
             )
+        await debug_notifier.notify(
+            "join target failed",
+            exc,
+            context=f"target_id={target_id} source={target.source}",
+        )
         return
     except FloodWaitError as exc:
         async with session_factory() as session:
@@ -177,9 +208,14 @@ async def _attempt_join_target(
                 title=None,
                 entity_type="unknown",
                 is_joined=False,
-                join_status="retry",
+                join_status="error",
                 last_error=f"Flood wait for {exc.seconds} seconds",
             )
+        await debug_notifier.notify(
+            "join target flood wait",
+            exc,
+            context=f"target_id={target_id} source={target.source}",
+        )
         return
     except RPCError as exc:
         async with session_factory() as session:
@@ -192,6 +228,28 @@ async def _attempt_join_target(
                 join_status="error",
                 last_error=str(exc),
             )
+        await debug_notifier.notify(
+            "join target rpc error",
+            exc,
+            context=f"target_id={target_id} source={target.source}",
+        )
+        return
+    except Exception as exc:  # noqa: BLE001
+        async with session_factory() as session:
+            await SubscriptionRepository(session).mark_join_result(
+                target_id,
+                chat_id=None,
+                title=None,
+                entity_type="unknown",
+                is_joined=False,
+                join_status="error",
+                last_error=str(exc),
+            )
+        await debug_notifier.notify(
+            "join target unexpected error",
+            exc,
+            context=f"target_id={target_id} source={target.source}",
+        )
         return
 
     async with session_factory() as session:
@@ -207,18 +265,39 @@ async def _attempt_join_target(
 
 
 async def _process_pending_joins(
-    client: TelegramClient, session_factory: async_sessionmaker[AsyncSession]
+    client: TelegramClient,
+    session_factory: async_sessionmaker[AsyncSession],
+    debug_notifier: SenderDebugNotifier,
 ) -> None:
     async with session_factory() as session:
         targets = await SubscriptionRepository(session).list_pending_targets()
 
     for target in targets:
-        await _attempt_join_target(client, session_factory, target.id)
+        try:
+            await _attempt_join_target(client, session_factory, target.id, debug_notifier)
+        except Exception as exc:  # noqa: BLE001
+            async with session_factory() as session:
+                await SubscriptionRepository(session).mark_join_result(
+                    target.id,
+                    chat_id=None,
+                    title=target.title,
+                    entity_type=target.entity_type,
+                    is_joined=False,
+                    join_status="error",
+                    last_error=str(exc),
+                )
+            logger.exception("Pending join failed for target %s: %s", target.id, exc)
+            await debug_notifier.notify(
+                "pending join boundary",
+                exc,
+                context=f"target_id={target.id} source={target.source}",
+            )
 
 
 async def _run_single_broadcast(
     client: TelegramClient,
     session_factory: async_sessionmaker[AsyncSession],
+    debug_notifier: SenderDebugNotifier,
 ) -> None:
     async with session_factory() as session:
         system_repo = SystemRepository(session)
@@ -265,6 +344,11 @@ async def _run_single_broadcast(
                 await SubscriptionRepository(session).disable_target_with_error(
                     target.id, str(exc)
                 )
+            await debug_notifier.notify(
+                "broadcast target disabled",
+                exc,
+                context=f"target_id={target.id} chat_id={target.chat_id} topic_id={target.topic_id}",
+            )
         except RPCError as exc:
             async with session_factory() as session:
                 await DeliveryRepository(session).log_delivery(
@@ -273,6 +357,25 @@ async def _run_single_broadcast(
                     success=False,
                     error=str(exc),
                 )
+            await debug_notifier.notify(
+                "broadcast rpc error",
+                exc,
+                context=f"target_id={target.id} chat_id={target.chat_id} topic_id={target.topic_id}",
+            )
+        except Exception as exc:  # noqa: BLE001
+            async with session_factory() as session:
+                await DeliveryRepository(session).log_delivery(
+                    target_id=target.id,
+                    message_template_id=message.id,
+                    success=False,
+                    error=str(exc),
+                )
+            logger.exception("Broadcast failed for target %s: %s", target.id, exc)
+            await debug_notifier.notify(
+                "broadcast unexpected error",
+                exc,
+                context=f"target_id={target.id} chat_id={target.chat_id} topic_id={target.topic_id}",
+            )
         else:
             async with session_factory() as session:
                 await DeliveryRepository(session).log_delivery(
@@ -293,6 +396,7 @@ async def _sender_loop(
     bot: Bot,
     session_factory: async_sessionmaker[AsyncSession],
     settings: Settings,
+    debug_notifier: SenderDebugNotifier,
 ) -> None:
     me = await client.get_me()
     self_id = me.id
@@ -303,10 +407,11 @@ async def _sender_loop(
 
     while True:
         try:
-            await _process_pending_joins(client, session_factory)
-            await _run_single_broadcast(client, session_factory)
+            await _process_pending_joins(client, session_factory, debug_notifier)
+            await _run_single_broadcast(client, session_factory, debug_notifier)
         except Exception as exc:  # noqa: BLE001
             logger.exception("Sender loop iteration failed: %s", exc)
+            await debug_notifier.notify("sender loop iteration", exc)
         await asyncio.sleep(settings.scheduler_poll_seconds)
 
 
@@ -335,8 +440,9 @@ async def run_sender_userbot(
         )
 
     logger.info("Sender userbot connected")
+    debug_notifier = SenderDebugNotifier(bot, session_factory, settings)
     sender_task = asyncio.create_task(
-        _sender_loop(client, bot, session_factory, settings),
+        _sender_loop(client, bot, session_factory, settings, debug_notifier),
         name="sender-loop",
     )
     try:

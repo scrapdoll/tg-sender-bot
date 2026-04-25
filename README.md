@@ -87,3 +87,16 @@ docker compose up -d --build
 ```bash
 pytest
 ```
+
+## Debug errors to chat
+
+Sender can send runtime errors and traceback details to owners in Telegram.
+
+Enable it in `.env`:
+
+```env
+SENDER_DEBUG_ERRORS_TO_CHAT=true
+SENDER_DEBUG_ERROR_COOLDOWN_SECONDS=300
+```
+
+Use this mode while diagnosing production issues. Repeated identical errors are rate-limited by the cooldown setting.

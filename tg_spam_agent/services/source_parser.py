@@ -12,20 +12,41 @@ class ParsedSource:
     topic_id: int | None = None
 
 
+def _parse_public_source(value: str) -> ParsedSource:
+    normalized = value.removeprefix("@").strip()
+    if not normalized:
+        raise ValueError("Username is empty.")
+
+    parts = normalized.split("/")
+    username = parts[0]
+    if not username:
+        raise ValueError("Username is empty.")
+
+    if len(parts) >= 2:
+        topic_id = parts[1]
+        if not topic_id.isdigit():
+            raise ValueError("Topic ID must be numeric.")
+        return ParsedSource(
+            normalized=f"@{username.lower()}/{int(topic_id)}",
+            access_type="public_topic",
+            lookup_value=username,
+            topic_id=int(topic_id),
+        )
+
+    return ParsedSource(
+        normalized=f"@{username.lower()}",
+        access_type="public",
+        lookup_value=username,
+    )
+
+
 def parse_target_source(raw_text: str) -> ParsedSource:
     value = raw_text.strip()
     if not value:
         raise ValueError("Empty source value.")
 
     if value.startswith("@"):
-        username = value[1:].strip()
-        if not username:
-            raise ValueError("Username is empty.")
-        return ParsedSource(
-            normalized=f"@{username.lower()}",
-            access_type="public",
-            lookup_value=username,
-        )
+        return _parse_public_source(value)
 
     if value.startswith("http://") or value.startswith("https://"):
         parsed = urlparse(value)
@@ -70,20 +91,9 @@ def parse_target_source(raw_text: str) -> ParsedSource:
                 topic_id=int(topic_id),
             )
 
-        username = parts[0]
-        if len(parts) >= 2 and parts[1].isdigit():
-            topic_id = int(parts[1])
-            return ParsedSource(
-                normalized=f"@{username.lower()}/{topic_id}",
-                access_type="public_topic",
-                lookup_value=username,
-                topic_id=topic_id,
-            )
+        return _parse_public_source(path)
 
-        return ParsedSource(
-            normalized=f"@{username.lower()}",
-            access_type="public",
-            lookup_value=username,
-        )
+    if "/" in value:
+        return _parse_public_source(value)
 
     raise ValueError("Use @username, public t.me link, or invite link.")
