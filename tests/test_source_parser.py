@@ -82,6 +82,14 @@ def test_parse_normalized_private_invite_source() -> None:
     assert parsed.lookup_value == "AbCdEf123"
 
 
+def test_parse_user_id_source() -> None:
+    parsed = parse_target_source("user:123456")
+
+    assert parsed.normalized == "user:123456"
+    assert parsed.access_type == "user"
+    assert parsed.lookup_value == "123456"
+
+
 def test_parse_invalid_source() -> None:
     with pytest.raises(ValueError):
         parse_target_source("https://example.com/nope")

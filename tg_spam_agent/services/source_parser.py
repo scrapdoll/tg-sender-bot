@@ -63,6 +63,16 @@ def parse_target_source(raw_text: str) -> ParsedSource:
             lookup_value=invite_hash,
         )
 
+    if value.startswith("user:"):
+        user_id = value.removeprefix("user:").strip()
+        if not user_id.isdigit():
+            raise ValueError("User ID must be numeric.")
+        return ParsedSource(
+            normalized=f"user:{int(user_id)}",
+            access_type="user",
+            lookup_value=str(int(user_id)),
+        )
+
     if value.startswith("c:"):
         path = value.removeprefix("c:").strip()
         parts = path.split("/")

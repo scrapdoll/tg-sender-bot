@@ -9,20 +9,25 @@ from tg_spam_agent.repositories import (
     SystemRepository,
 )
 from tg_spam_agent.sender.app import _run_single_broadcast
+from tg_spam_agent.sender.app import _extract_required_paid_stars
+from telethon.errors import RPCError
 
 
 class FakeClient:
     def __init__(self) -> None:
-        self.sent: list[tuple[object, str, dict[str, object]]] = []
+        self.sent: list[tuple[object, str, int | None]] = []
 
     async def get_entity(self, candidate):
         return candidate
 
+    async def get_input_entity(self, entity):
+        return entity
+
     async def get_dialogs(self):
         return []
 
-    async def send_message(self, entity, text, **kwargs) -> None:
-        self.sent.append((entity, text, kwargs))
+    async def __call__(self, request):
+        self.sent.append((request.peer, request.message, request.allow_paid_stars))
 
 
 class FakeDebugNotifier:
@@ -77,6 +82,12 @@ async def test_broadcast_with_ready_inputs_sends_and_advances_schedule() -> None
     async with session_factory() as session:
         settings = await SystemRepository(session).get_settings()
 
-    assert client.sent == [("publictarget", message.text, {})]
+    assert client.sent == [("publictarget", message.text, None)]
     assert settings.last_broadcast_at is not None
     assert settings.next_broadcast_at is not None
+
+
+def test_extract_required_paid_stars_from_rpc_error() -> None:
+    error = RPCError(None, "ALLOW_PAYMENT_REQUIRED_42", 400)
+
+    assert _extract_required_paid_stars(error) == 42

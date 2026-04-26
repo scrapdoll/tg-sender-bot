@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import random
+import re
 from datetime import datetime, timezone
 from random import Random
 
@@ -23,7 +25,7 @@ from telethon.errors import (
     UsernameNotOccupiedError,
 )
 from telethon.tl.functions.channels import JoinChannelRequest
-from telethon.tl.functions.messages import ImportChatInviteRequest
+from telethon.tl.functions.messages import ImportChatInviteRequest, SendMessageRequest
 
 from tg_spam_agent.config import Settings
 from tg_spam_agent.repositories import (
@@ -39,6 +41,8 @@ from tg_spam_agent.services.scheduler import compute_next_broadcast_time, is_bro
 from tg_spam_agent.services.source_parser import parse_target_source
 
 logger = logging.getLogger(__name__)
+
+_ALLOW_PAYMENT_REQUIRED_RE = re.compile(r"ALLOW_PAYMENT_REQUIRED_(\d+)")
 
 
 def _preview_text(event) -> tuple[str | None, str]:
@@ -64,6 +68,8 @@ def _entity_kind(entity: object) -> str:
         return "channel"
     if isinstance(entity, types.Chat):
         return "group"
+    if isinstance(entity, types.User):
+        return "user"
     return "unknown"
 
 
@@ -76,6 +82,11 @@ def _extract_title(entity: object) -> str | None:
         return entity.title
     if isinstance(entity, types.Chat):
         return entity.title
+    if isinstance(entity, types.User):
+        full_name = " ".join(
+            part for part in [entity.first_name, entity.last_name] if part
+        )
+        return full_name or entity.username
     return None
 
 
@@ -89,6 +100,8 @@ async def _resolve_broadcast_entity(client: TelegramClient, target) -> object:
     if parsed is not None:
         if parsed.access_type in {"public", "public_topic"}:
             lookup_candidates.append(parsed.lookup_value)
+        elif parsed.access_type == "user":
+            lookup_candidates.append(int(parsed.lookup_value))
         elif parsed.access_type == "private_topic":
             lookup_candidates.append(int(parsed.lookup_value))
     if target.chat_id is not None:
@@ -111,6 +124,75 @@ async def _resolve_broadcast_entity(client: TelegramClient, target) -> object:
     if target.chat_id is None:
         raise ValueError(f"Target #{target.id} has no chat_id.")
     return target.chat_id
+
+
+def _extract_required_paid_stars(exc: RPCError) -> int | None:
+    error_text = " ".join(
+        str(value)
+        for value in [
+            getattr(exc, "message", None),
+            getattr(exc, "code", None),
+            str(exc),
+        ]
+        if value is not None
+    )
+    match = _ALLOW_PAYMENT_REQUIRED_RE.search(error_text)
+    return int(match.group(1)) if match else None
+
+
+async def _send_broadcast_message(
+    client: TelegramClient,
+    entity: object,
+    text: str,
+    target,
+    settings,
+    *,
+    allow_paid_stars: int | None = None,
+) -> None:
+    input_entity = await client.get_input_entity(entity)
+    reply_to = (
+        types.InputReplyToMessage(target.topic_id)
+        if target.topic_id is not None
+        else None
+    )
+    await client(
+        SendMessageRequest(
+            peer=input_entity,
+            message=text,
+            random_id=random.randint(-(2**63), 2**63 - 1),
+            reply_to=reply_to,
+            allow_paid_stars=allow_paid_stars,
+        )
+    )
+
+
+async def _send_broadcast_with_paid_retry(
+    client: TelegramClient,
+    entity: object,
+    text: str,
+    target,
+    settings,
+) -> int:
+    try:
+        await _send_broadcast_message(client, entity, text, target, settings)
+        return 0
+    except RPCError as exc:
+        required_stars = _extract_required_paid_stars(exc)
+        if required_stars is None:
+            raise
+        if not settings.allow_paid_messages:
+            raise
+        if required_stars > settings.max_paid_message_stars:
+            raise
+        await _send_broadcast_message(
+            client,
+            entity,
+            text,
+            target,
+            settings,
+            allow_paid_stars=required_stars,
+        )
+        return required_stars
 
 
 async def _notify_owners(
@@ -209,7 +291,10 @@ async def _attempt_join_target(
     try:
         if parsed.access_type in {"public", "public_topic"}:
             entity = await client.get_entity(parsed.lookup_value)
-            await client(JoinChannelRequest(entity))
+            if not isinstance(entity, types.User):
+                await client(JoinChannelRequest(entity))
+        elif parsed.access_type == "user":
+            entity = await client.get_entity(int(parsed.lookup_value))
         elif parsed.access_type == "private_topic":
             entity = await client.get_entity(int(parsed.lookup_value))
         else:
@@ -389,11 +474,14 @@ async def _run_single_broadcast(
 
     for target in targets:
         try:
-            send_kwargs = {}
-            if target.topic_id is not None:
-                send_kwargs["reply_to"] = target.topic_id
             entity = await _resolve_broadcast_entity(client, target)
-            await client.send_message(entity, message.text, **send_kwargs)
+            paid_stars_used = await _send_broadcast_with_paid_retry(
+                client,
+                entity,
+                message.text,
+                target,
+                settings,
+            )
         except (ChatWriteForbiddenError, ChannelPrivateError) as exc:
             async with session_factory() as session:
                 await DeliveryRepository(session).log_delivery(
@@ -438,7 +526,11 @@ async def _run_single_broadcast(
                 context=f"target_id={target.id} chat_id={target.chat_id} topic_id={target.topic_id}",
             )
         else:
-            logger.info("Broadcast delivered to target %s", target.id)
+            logger.info(
+                "Broadcast delivered to target %s paid_stars=%s",
+                target.id,
+                paid_stars_used,
+            )
             async with session_factory() as session:
                 await DeliveryRepository(session).log_delivery(
                     target_id=target.id,

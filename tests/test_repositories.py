@@ -85,6 +85,13 @@ async def test_system_repository_updates_schedule_fields_independently() -> None
         assert ensure_utc(updated.last_broadcast_at) == last_run
         assert ensure_utc(updated.next_broadcast_at) == second_next_run
 
+        updated = await repo.update_settings(
+            allow_paid_messages=True,
+            max_paid_message_stars=250,
+        )
+        assert updated.allow_paid_messages is True
+        assert updated.max_paid_message_stars == 250
+
 
 async def test_inbound_repository_detects_seen_sender() -> None:
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")

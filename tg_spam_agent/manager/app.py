@@ -49,6 +49,7 @@ class ManagerStates(StatesGroup):
     waiting_message_text = State()
     waiting_interval = State()
     waiting_jitter = State()
+    waiting_paid_stars = State()
     waiting_whitelist_add = State()
     waiting_whitelist_remove = State()
 
@@ -249,6 +250,8 @@ async def _show_schedule(
         f"{tr.t('schedule_active')}: {settings.is_active}\n"
         f"{tr.t('schedule_interval')}: {settings.base_interval_minutes} min\n"
         f"{tr.t('schedule_jitter')}: {settings.jitter_minutes} min\n"
+        f"{tr.t('schedule_paid_messages')}: {settings.allow_paid_messages}\n"
+        f"{tr.t('schedule_paid_limit')}: {settings.max_paid_message_stars} Stars\n"
         f"{tr.t('schedule_last_run')}: {_dt(settings.last_broadcast_at, tr)}\n"
         f"{tr.t('schedule_next_run')}: {_dt(settings.next_broadcast_at, tr)}"
     )
@@ -702,6 +705,48 @@ def create_manager_router(
             )
         await state.clear()
         await _show_schedule(message, session_factory, tr)
+
+    @router.callback_query(F.data == "schedule:set_paid_stars")
+    async def schedule_set_paid_stars(callback: CallbackQuery, state: FSMContext) -> None:
+        if not await _ensure_callback_access(callback, session_factory):
+            return
+        tr = await _get_translator(session_factory, callback.from_user.id)
+        await state.set_state(ManagerStates.waiting_paid_stars)
+        await callback.message.answer(tr.t("send_paid_stars"))
+        await callback.answer()
+
+    @router.message(ManagerStates.waiting_paid_stars, F.text)
+    async def schedule_paid_stars(message: Message, state: FSMContext) -> None:
+        if not await _ensure_message_access(message, session_factory):
+            return
+        tr = await _get_translator(session_factory, message.from_user.id)
+        try:
+            value = int(message.text.strip())
+        except ValueError:
+            await message.answer(tr.t("invalid_paid_stars"))
+            return
+        if value < 0 or value > 10000:
+            await message.answer(tr.t("invalid_paid_stars"))
+            return
+        async with session_factory() as session:
+            await SystemRepository(session).update_settings(
+                max_paid_message_stars=value,
+            )
+        await state.clear()
+        await _show_schedule(message, session_factory, tr)
+
+    @router.callback_query(F.data == "schedule:toggle_paid_messages")
+    async def schedule_toggle_paid_messages(callback: CallbackQuery) -> None:
+        if not await _ensure_callback_access(callback, session_factory):
+            return
+        tr = await _get_translator(session_factory, callback.from_user.id)
+        async with session_factory() as session:
+            repo = SystemRepository(session)
+            current = await repo.get_settings()
+            await repo.update_settings(
+                allow_paid_messages=not current.allow_paid_messages,
+            )
+        await _show_schedule(callback, session_factory, tr)
 
     @router.callback_query(F.data == "schedule:toggle")
     async def schedule_toggle(callback: CallbackQuery) -> None:

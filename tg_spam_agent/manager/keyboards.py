@@ -100,11 +100,23 @@ def build_schedule_keyboard(
     builder.button(text=tr.t("btn_set_interval"), callback_data="schedule:set_interval")
     builder.button(text=tr.t("btn_set_jitter"), callback_data="schedule:set_jitter")
     builder.button(
+        text=tr.t("btn_set_paid_stars"),
+        callback_data="schedule:set_paid_stars",
+    )
+    builder.button(
+        text=(
+            tr.t("btn_disable_paid_messages")
+            if settings.allow_paid_messages
+            else tr.t("btn_enable_paid_messages")
+        ),
+        callback_data="schedule:toggle_paid_messages",
+    )
+    builder.button(
         text=tr.t("btn_disable_sender") if settings.is_active else tr.t("btn_enable_sender"),
         callback_data="schedule:toggle",
     )
     builder.button(text=tr.t("btn_back"), callback_data="menu:main")
-    builder.adjust(2, 1, 1)
+    builder.adjust(2, 2, 1, 1)
     return builder.as_markup()
 
 

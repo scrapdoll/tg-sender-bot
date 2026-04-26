@@ -60,6 +60,8 @@ class SystemRepository:
         base_interval_minutes: int | None = None,
         jitter_minutes: int | None = None,
         is_active: bool | None = None,
+        allow_paid_messages: bool | None = None,
+        max_paid_message_stars: int | None = None,
         next_broadcast_at: datetime | None | object = _UNSET,
         last_broadcast_at: datetime | None | object = _UNSET,
     ) -> BroadcastSettings:
@@ -74,6 +76,10 @@ class SystemRepository:
             settings.jitter_minutes = jitter_minutes
         if is_active is not None:
             settings.is_active = is_active
+        if allow_paid_messages is not None:
+            settings.allow_paid_messages = allow_paid_messages
+        if max_paid_message_stars is not None:
+            settings.max_paid_message_stars = max(0, max_paid_message_stars)
         if next_broadcast_at is not _UNSET:
             settings.next_broadcast_at = next_broadcast_at
         if last_broadcast_at is not _UNSET:

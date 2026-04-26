@@ -29,6 +29,16 @@ async def init_database(
                 await conn.exec_driver_sql(
                     "ALTER TABLE subscription_targets ADD COLUMN topic_title VARCHAR(255)",
                 )
+            rows = await conn.exec_driver_sql("PRAGMA table_info(broadcast_settings)")
+            columns = {row[1] for row in rows}
+            if "allow_paid_messages" not in columns:
+                await conn.exec_driver_sql(
+                    "ALTER TABLE broadcast_settings ADD COLUMN allow_paid_messages BOOLEAN NOT NULL DEFAULT 0",
+                )
+            if "max_paid_message_stars" not in columns:
+                await conn.exec_driver_sql(
+                    "ALTER TABLE broadcast_settings ADD COLUMN max_paid_message_stars INTEGER NOT NULL DEFAULT 0",
+                )
 
     async with session_factory() as session:
         system_repo = SystemRepository(session)

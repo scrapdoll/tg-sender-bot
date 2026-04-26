@@ -84,6 +84,12 @@ class BroadcastSettings(Base):
     base_interval_minutes: Mapped[int] = mapped_column(Integer, default=60)
     jitter_minutes: Mapped[int] = mapped_column(Integer, default=10)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    allow_paid_messages: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
+    max_paid_message_stars: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False
+    )
     last_broadcast_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
