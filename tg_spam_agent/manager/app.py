@@ -432,6 +432,17 @@ def create_manager_router(
         tr = await _get_translator(session_factory, callback.from_user.id)
         await _show_inbound_users(callback, session_factory, tr)
 
+    @router.callback_query(F.data.startswith("inbound_user_no_link:"))
+    async def inbound_user_no_link(callback: CallbackQuery) -> None:
+        if not await _ensure_callback_access(callback, session_factory):
+            return
+        tr = await _get_translator(session_factory, callback.from_user.id)
+        sender_id = callback.data.split(":", 1)[1]
+        await callback.answer(
+            tr.t("inbound_user_no_link", user_id=sender_id),
+            show_alert=True,
+        )
+
     @router.callback_query(F.data == "menu:status")
     async def menu_status(callback: CallbackQuery, state: FSMContext) -> None:
         if not await _ensure_callback_access(callback, session_factory):

@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import re
+
 from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from tg_spam_agent.manager.i18n import Translator
 from tg_spam_agent.models import BroadcastSettings, MessageTemplate, SubscriptionTarget
 from tg_spam_agent.repositories import InboundSenderSummary
+
+
+_TELEGRAM_USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{5,32}$")
 
 
 def _shorten(text: str, limit: int = 24) -> str:
@@ -119,10 +124,17 @@ def build_inbound_users_keyboard(
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for summary in summaries:
-        builder.button(
-            text=_inbound_user_button_label(summary, tr),
-            url=_inbound_user_url(summary),
-        )
+        url = _inbound_user_url(summary)
+        if url is None:
+            builder.button(
+                text=_inbound_user_button_label(summary, tr),
+                callback_data=f"inbound_user_no_link:{summary.event.sender_id}",
+            )
+        else:
+            builder.button(
+                text=_inbound_user_button_label(summary, tr),
+                url=url,
+            )
     builder.button(text=tr.t("btn_refresh"), callback_data="menu:inbound_users")
     builder.button(text=tr.t("btn_back"), callback_data="menu:main")
     builder.adjust(*([1] * len(summaries)), 2)
@@ -137,10 +149,10 @@ def _inbound_user_button_label(summary: InboundSenderSummary, tr: Translator) ->
     return f"{_shorten(label, 36)} ({summary.message_count})"
 
 
-def _inbound_user_url(summary: InboundSenderSummary) -> str:
-    if summary.event.username:
+def _inbound_user_url(summary: InboundSenderSummary) -> str | None:
+    if summary.event.username and _TELEGRAM_USERNAME_RE.fullmatch(summary.event.username):
         return f"https://t.me/{summary.event.username}"
-    return f"tg://user?id={summary.event.sender_id}"
+    return None
 
 
 def build_language_keyboard(tr: Translator) -> InlineKeyboardMarkup:
