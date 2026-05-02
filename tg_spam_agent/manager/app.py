@@ -12,8 +12,14 @@ from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.methods import SendInvoice
-from aiogram.types import CallbackQuery, LabeledPrice, Message, PreCheckoutQuery
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    LabeledPrice,
+    Message,
+    PreCheckoutQuery,
+)
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from telethon import TelegramClient
 from telethon.errors import SessionPasswordNeededError
@@ -714,22 +720,36 @@ def create_manager_router(
             return
         payload = BillingRepository.build_payload(context.tenant_id, plan.id)
         try:
-            await callback.bot(
-                SendInvoice(
-                    chat_id=callback.message.chat.id,
-                    title=f"{plan.name} subscription",
-                    description=f"{plan.max_targets} targets, {plan.max_templates} templates",
-                    payload=payload,
-                    currency="XTR",
-                    prices=[LabeledPrice(label=plan.name, amount=plan.price_stars)],
-                    provider_token="",
-                    subscription_period=plan.period_seconds,
-                )
+            invoice_link = await callback.bot.create_invoice_link(
+                title=f"{plan.name} subscription",
+                description=f"{plan.max_targets} targets, {plan.max_templates} templates",
+                payload=payload,
+                currency="XTR",
+                prices=[LabeledPrice(label=plan.name, amount=plan.price_stars)],
+                provider_token="",
+                subscription_period=plan.period_seconds,
             )
         except TelegramBadRequest as exc:
-            logger.warning("Failed to send Stars invoice for tenant %s: %s", context.tenant_id, exc)
+            logger.warning(
+                "Failed to create Stars invoice link for tenant %s: %s",
+                context.tenant_id,
+                exc,
+            )
             await callback.answer(f"Invoice error: {exc.message}", show_alert=True)
             return
+        await callback.message.answer(
+            "Open the invoice link to pay with Telegram Stars.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text=f"Pay {plan.price_stars} Stars",
+                            url=invoice_link,
+                        )
+                    ]
+                ]
+            ),
+        )
         await callback.answer()
 
     @router.pre_checkout_query()
