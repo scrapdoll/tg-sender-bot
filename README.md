@@ -1,102 +1,106 @@
-# Telethon Sender + Manager Bot
+# Telegram Multi-Tenant Sender SaaS
 
-Проект состоит из двух процессов с общей SQLite-базой:
+Telegram-only SaaS for managing per-customer Telethon sender userbots through one aiogram manager bot.
 
-- `sender-userbot` на `Telethon` работает от имени пользовательского Telegram-аккаунта, подписывается на паблики, группы и каналы, рассылает случайное активное сообщение по глобальному расписанию и уведомляет владельцев о входящих личных сообщениях.
-- `manager-bot` на `aiogram` управляет подписками, сообщениями, расписанием, whitelist и языком интерфейса через Telegram-бота.
+The product is multi-tenant:
 
-## Возможности
+- Each Telegram user gets a tenant on `/start`.
+- Each tenant stores its own targets, message templates, schedule, inbound events, delivery logs, subscription, and encrypted Telethon `StringSession`.
+- Platform admins are configured by `PLATFORM_ADMIN_IDS` and can edit the paid plan inside the manager bot.
+- Customers pay with Telegram Stars. The active plan defaults to 500 Stars per 30 days, 100 targets, 10 templates, and a 30 minute minimum interval.
+- Expired or inactive subscriptions keep data visible but pause joins and broadcasts.
 
-- Добавление целей по `@username`, public `t.me` link или invite link.
-- Поддержка forum-супергрупп: можно добавить ссылку на конкретный топик, например `https://t.me/groupname/123` или `https://t.me/c/1234567890/123`.
-- Очередь попыток join со статусами `pending`, `joined`, `approval_pending`, `retry`, `error`.
-- Пул из нескольких сообщений со случайным выбором одного активного текста на каждую рассылку.
-- Глобальный интервал и настраиваемый случайный джиттер.
-- Whitelist пользователей для доступа к `manager-bot`.
-- Русская локализация менеджера по умолчанию и переключение языка в меню.
-- Уведомления владельцам о личных сообщениях userbot-аккаунту.
-- Docker Compose для развертывания обоих процессов на сервере.
+## Runtime
 
-## Переменные окружения
+Two processes are still used:
 
-Скопируйте [.env.example](/G:/projects/tg-spam-agent/.env.example) в `.env` и заполните:
+- `manager-bot`: customer UI, tenant creation, billing, plan admin settings, userbot onboarding.
+- `sender-userbot`: worker loop that selects tenants with active subscriptions and connected sessions, then runs joins and broadcasts tenant by tenant.
 
-- `MANAGER_BOT_TOKEN` - токен бота-менеджера.
-- `TELEGRAM_API_ID` и `TELEGRAM_API_HASH` - значения с [my.telegram.org](https://my.telegram.org).
-- `OWNER_IDS` - список Telegram user id через запятую.
-- `DATABASE_PATH` - путь к SQLite-файлу.
-- `TELETHON_SESSION_PATH` - путь для сохранения session userbot.
-- `LOG_LEVEL` - уровень логирования.
-- `SCHEDULER_POLL_SECONDS` - как часто sender проверяет очередь join и расписание.
-- `DEFAULT_INTERVAL_MINUTES`, `DEFAULT_JITTER_MINUTES` - дефолтные значения при первом старте.
+Production storage is PostgreSQL. Supabase works through `DATABASE_URL`.
 
-## Локальный запуск
+## Environment
 
-Установить зависимости:
+Copy `.env.example` to `.env` and set:
+
+```env
+MANAGER_BOT_TOKEN=
+TELEGRAM_API_ID=
+TELEGRAM_API_HASH=
+PLATFORM_ADMIN_IDS=123456789
+DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/tg_spam_agent
+SESSION_ENCRYPTION_KEY=change-me-to-a-long-random-secret
+LOG_LEVEL=INFO
+SCHEDULER_POLL_SECONDS=15
+DEFAULT_INTERVAL_MINUTES=60
+DEFAULT_JITTER_MINUTES=10
+SENDER_DEBUG_ERRORS_TO_CHAT=false
+SENDER_DEBUG_ERROR_COOLDOWN_SECONDS=300
+```
+
+Do not put plan price or limits in env. Platform admins edit them in the manager bot Admin menu.
+
+## Local Run
+
+Install dependencies:
 
 ```bash
 pip install -e .[dev]
 ```
 
-Один раз создать Telethon session:
+Run migrations against PostgreSQL/Supabase:
 
 ```bash
-tg-spam-agent init-userbot-session
+alembic upgrade head
 ```
 
-Запустить менеджера:
+Run the manager:
 
 ```bash
 tg-spam-agent run-manager
 ```
 
-Запустить sender-userbot:
+Run the sender worker:
 
 ```bash
 tg-spam-agent run-sender
 ```
 
-## Docker
-
-Сначала авторизуйте userbot внутри контейнера и сохраните session в volume:
+Legacy file-based session setup is deprecated:
 
 ```bash
-docker compose run --rm sender-userbot tg-spam-agent init-userbot-session
+tg-spam-agent init-userbot-session
 ```
 
-Потом поднимите оба сервиса:
+Use the manager bot Account menu instead. It walks the customer through phone, code, and optional 2FA password, then stores only an encrypted Telethon `StringSession`.
+
+## Docker
+
+Local compose starts PostgreSQL plus both app processes:
 
 ```bash
 docker compose up -d --build
 ```
 
-Оба контейнера используют общий volume `tg_spam_agent_data`, где лежат SQLite-база, Telethon `.session` и runtime state.
+For Supabase production, point `DATABASE_URL` at the Supabase PostgreSQL connection string and run:
 
-## Управление через manager-bot
+```bash
+alembic upgrade head
+```
 
-- `/start` или `/help` - главное меню.
-- `Подписки` - добавить новую цель или конкретный топик forum-группы, повторить join, отключить, включить или удалить цель.
-- `Сообщения` - добавить текст, отключить, включить или удалить сообщение.
-- `Расписание` - поменять интервал, джиттер и общее состояние рассылки.
-- `Whitelist` - добавить или удалить Telegram user id.
-- `Статус` - сводка по сессии, целям, сообщениям и последним ошибкам доставки.
-- `Язык` - переключить интерфейс менеджера между русским и английским. По умолчанию используется русский.
+## Manager Bot Menus
 
-## Тесты
+- `Account`: connect, view, or disconnect the tenant userbot session.
+- `Subscription`: show current plan, subscription status, and Stars invoice.
+- `Targets`: add, retry, enable, disable, or delete tenant targets.
+- `Messages`: manage tenant message templates.
+- `Schedule`: manage interval, jitter, sender toggle, and paid-message Stars allowance.
+- `Users`: show inbound private users for the tenant userbot.
+- `Tenant members`: add/remove additional manager users for the tenant.
+- `Admin`: platform-admin-only plan settings: Stars price, max targets, max templates, min interval, active/inactive plan.
+
+## Tests
 
 ```bash
 pytest
 ```
-
-## Debug errors to chat
-
-Sender can send runtime errors and traceback details to owners in Telegram.
-
-Enable it in `.env`:
-
-```env
-SENDER_DEBUG_ERRORS_TO_CHAT=true
-SENDER_DEBUG_ERROR_COOLDOWN_SECONDS=300
-```
-
-Use this mode while diagnosing production issues. Repeated identical errors are rate-limited by the cooldown setting.

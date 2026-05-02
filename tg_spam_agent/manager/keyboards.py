@@ -19,6 +19,8 @@ def _shorten(text: str, limit: int = 24) -> str:
 
 def build_main_keyboard(tr: Translator) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
+    builder.button(text="Account", callback_data="menu:account")
+    builder.button(text="Subscription", callback_data="menu:billing")
     builder.button(text=tr.t("btn_targets"), callback_data="menu:subscriptions")
     builder.button(text=tr.t("btn_messages"), callback_data="menu:messages")
     builder.button(text=tr.t("btn_schedule"), callback_data="menu:schedule")
@@ -26,7 +28,43 @@ def build_main_keyboard(tr: Translator) -> InlineKeyboardMarkup:
     builder.button(text=tr.t("btn_whitelist"), callback_data="menu:whitelist")
     builder.button(text=tr.t("btn_status"), callback_data="menu:status")
     builder.button(text=tr.t("btn_language"), callback_data="menu:language")
-    builder.adjust(2, 2, 2, 1)
+    builder.button(text="Admin", callback_data="menu:admin")
+    builder.adjust(2, 2, 2, 2, 2)
+    return builder.as_markup()
+
+
+def build_account_keyboard(tr: Translator) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Connect userbot", callback_data="account:connect")
+    builder.button(text="Disconnect userbot", callback_data="account:disconnect")
+    builder.button(text=tr.t("btn_back"), callback_data="menu:main")
+    builder.adjust(1, 1, 1)
+    return builder.as_markup()
+
+
+def build_billing_keyboard(plan, tr: Translator) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    if plan is not None and plan.is_active:
+        builder.button(text=f"Pay {plan.price_stars} Stars", callback_data="billing:pay")
+    builder.button(text=tr.t("btn_refresh"), callback_data="menu:billing")
+    builder.button(text=tr.t("btn_back"), callback_data="menu:main")
+    builder.adjust(1, 2)
+    return builder.as_markup()
+
+
+def build_admin_keyboard(plan, tr: Translator) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Set price", callback_data="admin:set_price")
+    builder.button(text="Set max targets", callback_data="admin:set_max_targets")
+    builder.button(text="Set max templates", callback_data="admin:set_max_templates")
+    builder.button(text="Set min interval", callback_data="admin:set_min_interval")
+    if plan is not None:
+        builder.button(
+            text="Disable plan" if plan.is_active else "Enable plan",
+            callback_data="admin:toggle_plan",
+        )
+    builder.button(text=tr.t("btn_back"), callback_data="menu:main")
+    builder.adjust(2, 2, 1, 1)
     return builder.as_markup()
 
 

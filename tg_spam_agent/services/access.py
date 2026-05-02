@@ -9,3 +9,6 @@ class AccessService:
 
     async def can_manage(self, user_id: int) -> bool:
         return await self.repo.is_allowed_manager_user(user_id)
+
+    async def can_admin_platform(self, user_id: int) -> bool:
+        return await self.repo.is_platform_admin(user_id)

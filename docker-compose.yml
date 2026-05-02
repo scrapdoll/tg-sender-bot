@@ -1,11 +1,23 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: tg_spam_agent
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - tg_spam_agent_pg:/var/lib/postgresql/data
+    restart: unless-stopped
+
   manager-bot:
     build: .
     command: ["tg-spam-agent", "run-manager"]
     env_file:
       - .env
-    volumes:
-      - tg_spam_agent_data:/app/data
+    depends_on:
+      - postgres
     restart: unless-stopped
 
   sender-userbot:
@@ -13,9 +25,9 @@ services:
     command: ["tg-spam-agent", "run-sender"]
     env_file:
       - .env
-    volumes:
-      - tg_spam_agent_data:/app/data
+    depends_on:
+      - postgres
     restart: unless-stopped
 
 volumes:
-  tg_spam_agent_data:
+  tg_spam_agent_pg:

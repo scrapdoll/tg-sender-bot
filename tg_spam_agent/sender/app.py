@@ -26,6 +26,7 @@ from telethon.errors import (
 )
 from telethon.tl.functions.channels import JoinChannelRequest
 from telethon.tl.functions.messages import ImportChatInviteRequest, SendMessageRequest
+from telethon.sessions import StringSession
 
 from tg_spam_agent.config import Settings
 from tg_spam_agent.repositories import (
@@ -34,7 +35,10 @@ from tg_spam_agent.repositories import (
     MessageRepository,
     SubscriptionRepository,
     SystemRepository,
+    TelegramSessionRepository,
+    TenantRepository,
 )
+from tg_spam_agent.services.crypto import SessionCipher
 from tg_spam_agent.services.debug_notifications import SenderDebugNotifier
 from tg_spam_agent.services.notifications import build_inbound_notification
 from tg_spam_agent.services.scheduler import compute_next_broadcast_time, is_broadcast_due
@@ -220,6 +224,7 @@ async def _process_inbound_event(
     bot: Bot,
     session_factory: async_sessionmaker[AsyncSession],
     self_id: int,
+    tenant_id: int,
 ) -> None:
     if event.out or not event.is_private or event.sender_id == self_id:
         return
@@ -231,8 +236,8 @@ async def _process_inbound_event(
     )
 
     async with session_factory() as session:
-        inbound_repo = InboundRepository(session)
-        system_repo = SystemRepository(session)
+        inbound_repo = InboundRepository(session, tenant_id)
+        system_repo = SystemRepository(session, tenant_id)
         already_notified_sender = await inbound_repo.has_events_from_sender(
             event.sender_id
         )
@@ -259,10 +264,11 @@ async def _attempt_join_target(
     client: TelegramClient,
     session_factory: async_sessionmaker[AsyncSession],
     target_id: int,
+    tenant_id: int,
     debug_notifier: SenderDebugNotifier,
 ) -> None:
     async with session_factory() as session:
-        repo = SubscriptionRepository(session)
+        repo = SubscriptionRepository(session, tenant_id)
         target = await repo.get_target(target_id)
         if target is None:
             return
@@ -271,7 +277,7 @@ async def _attempt_join_target(
         parsed = parse_target_source(target.source)
     except ValueError as exc:
         async with session_factory() as session:
-            await SubscriptionRepository(session).mark_join_result(
+            await SubscriptionRepository(session, tenant_id).mark_join_result(
                 target_id,
                 chat_id=None,
                 title=None,
@@ -305,7 +311,7 @@ async def _attempt_join_target(
             entity = await client.get_entity(parsed.lookup_value)
     except InviteRequestSentError as exc:
         async with session_factory() as session:
-            await SubscriptionRepository(session).mark_join_result(
+            await SubscriptionRepository(session, tenant_id).mark_join_result(
                 target_id,
                 chat_id=None,
                 title=None,
@@ -322,7 +328,7 @@ async def _attempt_join_target(
         return
     except (ValueError, ChannelPrivateError, InviteHashExpiredError, UsernameInvalidError, UsernameNotOccupiedError) as exc:
         async with session_factory() as session:
-            await SubscriptionRepository(session).mark_join_result(
+            await SubscriptionRepository(session, tenant_id).mark_join_result(
                 target_id,
                 chat_id=None,
                 title=None,
@@ -339,7 +345,7 @@ async def _attempt_join_target(
         return
     except FloodWaitError as exc:
         async with session_factory() as session:
-            await SubscriptionRepository(session).mark_join_result(
+            await SubscriptionRepository(session, tenant_id).mark_join_result(
                 target_id,
                 chat_id=None,
                 title=None,
@@ -356,7 +362,7 @@ async def _attempt_join_target(
         return
     except RPCError as exc:
         async with session_factory() as session:
-            await SubscriptionRepository(session).mark_join_result(
+            await SubscriptionRepository(session, tenant_id).mark_join_result(
                 target_id,
                 chat_id=None,
                 title=None,
@@ -373,7 +379,7 @@ async def _attempt_join_target(
         return
     except Exception as exc:  # noqa: BLE001
         async with session_factory() as session:
-            await SubscriptionRepository(session).mark_join_result(
+            await SubscriptionRepository(session, tenant_id).mark_join_result(
                 target_id,
                 chat_id=None,
                 title=None,
@@ -390,7 +396,7 @@ async def _attempt_join_target(
         return
 
     async with session_factory() as session:
-        await SubscriptionRepository(session).mark_join_result(
+        await SubscriptionRepository(session, tenant_id).mark_join_result(
             target_id,
             chat_id=_extract_id(entity),
             title=_extract_title(entity) or target.source,
@@ -399,23 +405,24 @@ async def _attempt_join_target(
             join_status="joined",
             last_error=None,
         )
-        await SystemRepository(session).update_settings(next_broadcast_at=None)
+        await SystemRepository(session, tenant_id).update_settings(next_broadcast_at=None)
 
 
 async def _process_pending_joins(
     client: TelegramClient,
     session_factory: async_sessionmaker[AsyncSession],
+    tenant_id: int,
     debug_notifier: SenderDebugNotifier,
 ) -> None:
     async with session_factory() as session:
-        targets = await SubscriptionRepository(session).list_pending_targets()
+        targets = await SubscriptionRepository(session, tenant_id).list_pending_targets()
 
     for target in targets:
         try:
-            await _attempt_join_target(client, session_factory, target.id, debug_notifier)
+            await _attempt_join_target(client, session_factory, target.id, tenant_id, debug_notifier)
         except Exception as exc:  # noqa: BLE001
             async with session_factory() as session:
-                await SubscriptionRepository(session).mark_join_result(
+                await SubscriptionRepository(session, tenant_id).mark_join_result(
                     target.id,
                     chat_id=None,
                     title=target.title,
@@ -436,11 +443,12 @@ async def _run_single_broadcast(
     client: TelegramClient,
     session_factory: async_sessionmaker[AsyncSession],
     debug_notifier: SenderDebugNotifier,
+    tenant_id: int,
 ) -> None:
     async with session_factory() as session:
-        system_repo = SystemRepository(session)
-        message_repo = MessageRepository(session)
-        target_repo = SubscriptionRepository(session)
+        system_repo = SystemRepository(session, tenant_id)
+        message_repo = MessageRepository(session, tenant_id)
+        target_repo = SubscriptionRepository(session, tenant_id)
         settings = await system_repo.get_settings()
         if settings is None or not settings.is_active:
             logger.debug("Broadcast skipped: settings missing or inactive")
@@ -484,13 +492,13 @@ async def _run_single_broadcast(
             )
         except (ChatWriteForbiddenError, ChannelPrivateError) as exc:
             async with session_factory() as session:
-                await DeliveryRepository(session).log_delivery(
+                await DeliveryRepository(session, tenant_id).log_delivery(
                     target_id=target.id,
                     message_template_id=message.id,
                     success=False,
                     error=str(exc),
                 )
-                await SubscriptionRepository(session).disable_target_with_error(
+                await SubscriptionRepository(session, tenant_id).disable_target_with_error(
                     target.id, str(exc)
                 )
             await debug_notifier.notify(
@@ -500,7 +508,7 @@ async def _run_single_broadcast(
             )
         except RPCError as exc:
             async with session_factory() as session:
-                await DeliveryRepository(session).log_delivery(
+                await DeliveryRepository(session, tenant_id).log_delivery(
                     target_id=target.id,
                     message_template_id=message.id,
                     success=False,
@@ -513,7 +521,7 @@ async def _run_single_broadcast(
             )
         except Exception as exc:  # noqa: BLE001
             async with session_factory() as session:
-                await DeliveryRepository(session).log_delivery(
+                await DeliveryRepository(session, tenant_id).log_delivery(
                     target_id=target.id,
                     message_template_id=message.id,
                     success=False,
@@ -532,14 +540,14 @@ async def _run_single_broadcast(
                 paid_stars_used,
             )
             async with session_factory() as session:
-                await DeliveryRepository(session).log_delivery(
+                await DeliveryRepository(session, tenant_id).log_delivery(
                     target_id=target.id,
                     message_template_id=message.id,
                     success=True,
                 )
 
     async with session_factory() as session:
-        await SystemRepository(session).update_settings(
+        await SystemRepository(session, tenant_id).update_settings(
             last_broadcast_at=now,
             next_broadcast_at=next_run,
         )
@@ -547,9 +555,10 @@ async def _run_single_broadcast(
 
 async def _reset_empty_broadcast_schedule(
     session_factory: async_sessionmaker[AsyncSession],
+    tenant_id: int,
 ) -> None:
     async with session_factory() as session:
-        system_repo = SystemRepository(session)
+        system_repo = SystemRepository(session, tenant_id)
         settings = await system_repo.get_settings()
         if (
             settings is None
@@ -560,7 +569,7 @@ async def _reset_empty_broadcast_schedule(
         if settings.last_broadcast_at is None:
             await system_repo.update_settings(next_broadcast_at=None)
             return
-        has_success = await DeliveryRepository(session).has_success_since(
+        has_success = await DeliveryRepository(session, tenant_id).has_success_since(
             settings.last_broadcast_at
         )
         if not has_success:
@@ -571,27 +580,78 @@ async def _reset_empty_broadcast_schedule(
 
 
 async def _sender_loop(
-    client: TelegramClient,
     bot: Bot,
     session_factory: async_sessionmaker[AsyncSession],
     settings: Settings,
     debug_notifier: SenderDebugNotifier,
 ) -> None:
-    me = await client.get_me()
-    self_id = me.id
-
-    @client.on(events.NewMessage(incoming=True))
-    async def on_new_message(event) -> None:
-        await _process_inbound_event(client, event, bot, session_factory, self_id)
-
     while True:
         try:
-            await _process_pending_joins(client, session_factory, debug_notifier)
-            await _run_single_broadcast(client, session_factory, debug_notifier)
+            async with session_factory() as session:
+                tenant_ids = await TenantRepository(session).list_active_sender_tenants()
+            for tenant_id in tenant_ids:
+                await _run_tenant_sender_cycle(
+                    bot,
+                    session_factory,
+                    settings,
+                    debug_notifier,
+                    tenant_id,
+                )
         except Exception as exc:  # noqa: BLE001
             logger.exception("Sender loop iteration failed: %s", exc)
             await debug_notifier.notify("sender loop iteration", exc)
         await asyncio.sleep(settings.scheduler_poll_seconds)
+
+
+async def _run_tenant_sender_cycle(
+    bot: Bot,
+    session_factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    debug_notifier: SenderDebugNotifier,
+    tenant_id: int,
+) -> None:
+    if not settings.session_encryption_key:
+        raise RuntimeError("SESSION_ENCRYPTION_KEY is required to run tenant sender sessions.")
+    async with session_factory() as session:
+        stored = await TelegramSessionRepository(session, tenant_id).get()
+    if not stored.encrypted_string_session:
+        return
+    string_session = SessionCipher(settings.session_encryption_key).decrypt(
+        stored.encrypted_string_session
+    )
+    client = TelegramClient(
+        StringSession(string_session),
+        settings.telegram_api_id,
+        settings.telegram_api_hash,
+    )
+    await client.connect()
+    try:
+        if not await client.is_user_authorized():
+            async with session_factory() as session:
+                await TelegramSessionRepository(session, tenant_id).set_error(
+                    "Telethon session is not authorized."
+                )
+            return
+
+        me = await client.get_me()
+        self_id = me.id
+
+        @client.on(events.NewMessage(incoming=True))
+        async def on_new_message(event) -> None:
+            await _process_inbound_event(
+                client,
+                event,
+                bot,
+                session_factory,
+                self_id,
+                tenant_id,
+            )
+
+        await _reset_empty_broadcast_schedule(session_factory, tenant_id)
+        await _process_pending_joins(client, session_factory, tenant_id, debug_notifier)
+        await _run_single_broadcast(client, session_factory, debug_notifier, tenant_id)
+    finally:
+        await client.disconnect()
 
 
 async def run_sender_userbot(
@@ -603,33 +663,23 @@ async def run_sender_userbot(
         raise RuntimeError(
             "MANAGER_BOT_TOKEN is required so the sender can notify owners."
         )
+    if not settings.session_encryption_key:
+        raise RuntimeError("SESSION_ENCRYPTION_KEY is required.")
 
     bot = Bot(
         token=settings.manager_bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
-    client = TelegramClient(
-        settings.session_name, settings.telegram_api_id, settings.telegram_api_hash
-    )
-    await client.connect()
-    if not await client.is_user_authorized():
-        await client.disconnect()
-        raise RuntimeError(
-            "Telethon session is not authorized. Run `tg-spam-agent init-userbot-session` first."
-        )
-
-    logger.info("Sender userbot connected")
-    await _reset_empty_broadcast_schedule(session_factory)
+    logger.info("Sender tenant loop started")
     debug_notifier = SenderDebugNotifier(bot, session_factory, settings)
     sender_task = asyncio.create_task(
-        _sender_loop(client, bot, session_factory, settings, debug_notifier),
+        _sender_loop(bot, session_factory, settings, debug_notifier),
         name="sender-loop",
     )
     try:
-        await client.run_until_disconnected()
+        await sender_task
     finally:
         sender_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await sender_task
-        await client.disconnect()
         await bot.session.close()

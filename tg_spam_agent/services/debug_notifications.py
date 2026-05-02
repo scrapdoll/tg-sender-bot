@@ -44,7 +44,7 @@ class SenderDebugNotifier:
         self._last_sent_at[fingerprint] = now
 
         async with self.session_factory() as session:
-            owner_ids = await SystemRepository(session).list_owner_ids()
+            owner_ids = await SystemRepository(session).list_platform_admin_ids()
 
         if not owner_ids:
             return

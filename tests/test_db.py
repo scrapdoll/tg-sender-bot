@@ -1,19 +1,20 @@
 from __future__ import annotations
 
-from sqlalchemy import text
+from sqlalchemy import select
 
 from tg_spam_agent.config import Settings
 from tg_spam_agent.db import create_session_factory, init_database
+from tg_spam_agent.models import PlatformAdmin, SubscriptionPlan
 
 
-async def test_init_database_adds_topic_columns_to_existing_sqlite_table() -> None:
+async def test_init_database_seeds_platform_admins_and_default_plan() -> None:
     settings = Settings(
         manager_bot_token="token",
         telegram_api_id=1,
         telegram_api_hash="hash",
-        owner_ids=(100,),
+        platform_admin_ids=(100,),
         database_url="sqlite+aiosqlite:///:memory:",
-        telethon_session_path="sender.session",
+        session_encryption_key="secret",
         log_level="INFO",
         scheduler_poll_seconds=15,
         default_interval_minutes=60,
@@ -23,34 +24,14 @@ async def test_init_database_adds_topic_columns_to_existing_sqlite_table() -> No
     )
     session_factory = create_session_factory(settings)
 
-    engine = session_factory.kw["bind"]
-    async with engine.begin() as conn:
-        await conn.execute(
-            text(
-                """
-                CREATE TABLE subscription_targets (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    source VARCHAR(255) NOT NULL UNIQUE,
-                    chat_id BIGINT,
-                    title VARCHAR(255),
-                    entity_type VARCHAR(32),
-                    access_type VARCHAR(32),
-                    is_joined BOOLEAN NOT NULL,
-                    is_enabled BOOLEAN NOT NULL,
-                    join_status VARCHAR(32),
-                    last_error TEXT,
-                    last_checked_at DATETIME,
-                    created_at DATETIME NOT NULL
-                )
-                """
-            )
-        )
-
     await init_database(session_factory, settings)
 
-    async with engine.begin() as conn:
-        rows = await conn.exec_driver_sql("PRAGMA table_info(subscription_targets)")
-        columns = {row[1] for row in rows}
+    async with session_factory() as session:
+        admin = await session.get(PlatformAdmin, 100)
+        plan = await session.scalar(select(SubscriptionPlan))
 
-    assert "topic_id" in columns
-    assert "topic_title" in columns
+    assert admin is not None
+    assert plan is not None
+    assert plan.price_stars == 500
+    assert plan.max_targets == 100
+    assert plan.max_templates == 10

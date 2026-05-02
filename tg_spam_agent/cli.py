@@ -41,7 +41,8 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("run-manager", help="Run the manager bot")
     subparsers.add_parser("run-sender", help="Run the Telethon sender userbot")
     subparsers.add_parser(
-        "init-userbot-session", help="Authorize and persist the Telethon user session"
+        "init-userbot-session",
+        help="Deprecated: connect userbot sessions through the manager bot Account menu",
     )
     return parser
 
