@@ -5,8 +5,9 @@ ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-COPY pyproject.toml README.md main.py /app/
+COPY pyproject.toml README.md main.py alembic.ini /app/
 COPY tg_spam_agent /app/tg_spam_agent
+COPY alembic /app/alembic
 
 RUN pip install --no-cache-dir .
 
