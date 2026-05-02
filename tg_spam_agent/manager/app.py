@@ -12,6 +12,7 @@ from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.methods import SendInvoice
 from aiogram.types import CallbackQuery, LabeledPrice, Message, PreCheckoutQuery
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from telethon import TelegramClient
@@ -713,15 +714,17 @@ def create_manager_router(
             return
         payload = BillingRepository.build_payload(context.tenant_id, plan.id)
         try:
-            await callback.bot.send_invoice(
-                chat_id=callback.message.chat.id,
-                title=f"{plan.name} subscription",
-                description=f"{plan.max_targets} targets, {plan.max_templates} templates",
-                payload=payload,
-                currency="XTR",
-                prices=[LabeledPrice(label=plan.name, amount=plan.price_stars)],
-                provider_token="",
-                subscription_period=plan.period_seconds,
+            await callback.bot(
+                SendInvoice(
+                    chat_id=callback.message.chat.id,
+                    title=f"{plan.name} subscription",
+                    description=f"{plan.max_targets} targets, {plan.max_templates} templates",
+                    payload=payload,
+                    currency="XTR",
+                    prices=[LabeledPrice(label=plan.name, amount=plan.price_stars)],
+                    provider_token="",
+                    subscription_period=plan.period_seconds,
+                )
             )
         except TelegramBadRequest as exc:
             logger.warning("Failed to send Stars invoice for tenant %s: %s", context.tenant_id, exc)
