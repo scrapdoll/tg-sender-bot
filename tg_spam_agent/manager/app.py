@@ -208,7 +208,7 @@ async def _show_main(target: Message | CallbackQuery, tr: Translator, context: T
         f"Tenant: <code>{context.tenant_id}</code>\n"
         f"Subscription: <b>{html.escape(status)}</b>"
     )
-    markup = build_main_keyboard(tr)
+    markup = build_main_keyboard(tr, show_admin=context.is_platform_admin)
     if isinstance(target, CallbackQuery):
         await _safe_edit(target, text, markup)
         await target.answer()
@@ -483,7 +483,7 @@ async def _show_status(
         f"{tr.t('schedule_next_run')}: {_dt(snapshot.settings.next_broadcast_at, tr)}\n\n"
         f"{tr.t('status_recent_failures')}\n{failure_lines}"
     )
-    markup = build_main_keyboard(tr)
+    markup = build_main_keyboard(tr, show_admin=context.is_platform_admin)
     if isinstance(target, CallbackQuery):
         await _safe_edit(target, text, markup)
         await target.answer()
@@ -531,7 +531,13 @@ def create_manager_router(
             return
         await state.clear()
         tr = await _get_translator(session_factory, settings, message.from_user.id)
-        await message.answer(tr.t("action_canceled"), reply_markup=build_main_keyboard(tr))
+        await message.answer(
+            tr.t("action_canceled"),
+            reply_markup=build_main_keyboard(
+                tr,
+                show_admin=context.is_platform_admin,
+            ),
+        )
 
     @router.callback_query(F.data == "noop")
     async def noop(callback: CallbackQuery) -> None:

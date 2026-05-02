@@ -17,7 +17,7 @@ def _shorten(text: str, limit: int = 24) -> str:
     return text if len(text) <= limit else f"{text[: limit - 1]}..."
 
 
-def build_main_keyboard(tr: Translator) -> InlineKeyboardMarkup:
+def build_main_keyboard(tr: Translator, *, show_admin: bool = False) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="Account", callback_data="menu:account")
     builder.button(text="Subscription", callback_data="menu:billing")
@@ -28,8 +28,11 @@ def build_main_keyboard(tr: Translator) -> InlineKeyboardMarkup:
     builder.button(text=tr.t("btn_whitelist"), callback_data="menu:whitelist")
     builder.button(text=tr.t("btn_status"), callback_data="menu:status")
     builder.button(text=tr.t("btn_language"), callback_data="menu:language")
-    builder.button(text="Admin", callback_data="menu:admin")
-    builder.adjust(2, 2, 2, 2, 2)
+    if show_admin:
+        builder.button(text="Admin", callback_data="menu:admin")
+        builder.adjust(2, 2, 2, 2, 2)
+    else:
+        builder.adjust(2, 2, 2, 2, 1)
     return builder.as_markup()
 
 

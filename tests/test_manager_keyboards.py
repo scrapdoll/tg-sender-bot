@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from tg_spam_agent.manager.i18n import Translator
-from tg_spam_agent.manager.keyboards import build_inbound_users_keyboard
+from tg_spam_agent.manager.keyboards import build_inbound_users_keyboard, build_main_keyboard
 from tg_spam_agent.models import InboundEvent
 from tg_spam_agent.repositories import InboundSenderSummary
 
@@ -30,3 +30,17 @@ def test_inbound_user_keyboard_avoids_tg_user_link_without_username() -> None:
     button = markup.inline_keyboard[0][0]
     assert button.url is None
     assert button.callback_data == "inbound_user_no_link:1001"
+
+
+def test_main_keyboard_hides_admin_button_for_regular_users() -> None:
+    markup = build_main_keyboard(Translator("en"), show_admin=False)
+    labels = [button.text for row in markup.inline_keyboard for button in row]
+
+    assert "Admin" not in labels
+
+
+def test_main_keyboard_shows_admin_button_for_platform_admins() -> None:
+    markup = build_main_keyboard(Translator("en"), show_admin=True)
+    labels = [button.text for row in markup.inline_keyboard for button in row]
+
+    assert "Admin" in labels
