@@ -23,6 +23,10 @@ dev = [
 [project.scripts]
 tg-spam-agent = "tg_spam_agent.cli:main"
 
+[tool.setuptools.packages.find]
+include = ["tg_spam_agent*"]
+exclude = ["alembic*", "tests*"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
