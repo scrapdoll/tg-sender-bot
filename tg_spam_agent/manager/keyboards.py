@@ -17,22 +17,27 @@ def _shorten(text: str, limit: int = 24) -> str:
     return text if len(text) <= limit else f"{text[: limit - 1]}..."
 
 
-def build_main_keyboard(tr: Translator, *, show_admin: bool = False) -> InlineKeyboardMarkup:
+def build_main_keyboard(
+    tr: Translator,
+    *,
+    show_tenant_admin: bool = False,
+    show_platform_admin: bool = False,
+) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.button(text="Account", callback_data="menu:account")
-    builder.button(text="Subscription", callback_data="menu:billing")
+    if show_tenant_admin:
+        builder.button(text="Account", callback_data="menu:account")
+        builder.button(text="Subscription", callback_data="menu:billing")
     builder.button(text=tr.t("btn_targets"), callback_data="menu:subscriptions")
     builder.button(text=tr.t("btn_messages"), callback_data="menu:messages")
     builder.button(text=tr.t("btn_schedule"), callback_data="menu:schedule")
     builder.button(text=tr.t("btn_inbound_users"), callback_data="menu:inbound_users")
-    builder.button(text=tr.t("btn_whitelist"), callback_data="menu:whitelist")
+    if show_tenant_admin:
+        builder.button(text=tr.t("btn_whitelist"), callback_data="menu:whitelist")
     builder.button(text=tr.t("btn_status"), callback_data="menu:status")
     builder.button(text=tr.t("btn_language"), callback_data="menu:language")
-    if show_admin:
+    if show_platform_admin:
         builder.button(text="Admin", callback_data="menu:admin")
-        builder.adjust(2, 2, 2, 2, 2)
-    else:
-        builder.adjust(2, 2, 2, 2, 1)
+    builder.adjust(2, repeat=True)
     return builder.as_markup()
 
 
@@ -74,9 +79,12 @@ def build_admin_keyboard(plan, tr: Translator) -> InlineKeyboardMarkup:
 def build_subscriptions_keyboard(
     targets: list[SubscriptionTarget],
     tr: Translator,
+    *,
+    can_mutate: bool = True,
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.button(text=tr.t("btn_add_target"), callback_data="sub:add")
+    if can_mutate:
+        builder.button(text=tr.t("btn_add_target"), callback_data="sub:add")
     builder.button(text=tr.t("btn_refresh"), callback_data="menu:subscriptions")
     for target in targets:
         label = _target_button_label(target)
@@ -99,14 +107,17 @@ def _target_button_label(target: SubscriptionTarget) -> str:
 def build_subscription_detail_keyboard(
     target: SubscriptionTarget,
     tr: Translator,
+    *,
+    can_mutate: bool = True,
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.button(
-        text=tr.t("btn_disable") if target.is_enabled else tr.t("btn_enable"),
-        callback_data=f"sub_toggle:{target.id}",
-    )
-    builder.button(text=tr.t("btn_retry"), callback_data=f"sub_retry:{target.id}")
-    builder.button(text=tr.t("btn_delete"), callback_data=f"sub_delete:{target.id}")
+    if can_mutate:
+        builder.button(
+            text=tr.t("btn_disable") if target.is_enabled else tr.t("btn_enable"),
+            callback_data=f"sub_toggle:{target.id}",
+        )
+        builder.button(text=tr.t("btn_retry"), callback_data=f"sub_retry:{target.id}")
+        builder.button(text=tr.t("btn_delete"), callback_data=f"sub_delete:{target.id}")
     builder.button(text=tr.t("btn_back"), callback_data="menu:subscriptions")
     builder.adjust(2, 1, 1)
     return builder.as_markup()
@@ -115,19 +126,23 @@ def build_subscription_detail_keyboard(
 def build_messages_keyboard(
     messages: list[MessageTemplate],
     tr: Translator,
+    *,
+    can_mutate: bool = True,
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.button(text=tr.t("btn_add_message"), callback_data="msg:add")
+    if can_mutate:
+        builder.button(text=tr.t("btn_add_message"), callback_data="msg:add")
     builder.button(text=tr.t("btn_refresh"), callback_data="menu:messages")
     for message in messages:
-        builder.button(
-            text=f"{tr.t('btn_disable') if message.is_enabled else tr.t('btn_enable')} #{message.id}",
-            callback_data=f"msg_toggle:{message.id}",
-        )
-        builder.button(
-            text=f"{tr.t('btn_delete')} #{message.id}",
-            callback_data=f"msg_delete:{message.id}",
-        )
+        if can_mutate:
+            builder.button(
+                text=f"{tr.t('btn_disable') if message.is_enabled else tr.t('btn_enable')} #{message.id}",
+                callback_data=f"msg_toggle:{message.id}",
+            )
+            builder.button(
+                text=f"{tr.t('btn_delete')} #{message.id}",
+                callback_data=f"msg_delete:{message.id}",
+            )
     builder.button(text=tr.t("btn_back"), callback_data="menu:main")
     builder.adjust(2, repeat=True)
     return builder.as_markup()
@@ -136,26 +151,29 @@ def build_messages_keyboard(
 def build_schedule_keyboard(
     settings: BroadcastSettings,
     tr: Translator,
+    *,
+    can_mutate: bool = True,
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.button(text=tr.t("btn_set_interval"), callback_data="schedule:set_interval")
-    builder.button(text=tr.t("btn_set_jitter"), callback_data="schedule:set_jitter")
-    builder.button(
-        text=tr.t("btn_set_paid_stars"),
-        callback_data="schedule:set_paid_stars",
-    )
-    builder.button(
-        text=(
-            tr.t("btn_disable_paid_messages")
-            if settings.allow_paid_messages
-            else tr.t("btn_enable_paid_messages")
-        ),
-        callback_data="schedule:toggle_paid_messages",
-    )
-    builder.button(
-        text=tr.t("btn_disable_sender") if settings.is_active else tr.t("btn_enable_sender"),
-        callback_data="schedule:toggle",
-    )
+    if can_mutate:
+        builder.button(text=tr.t("btn_set_interval"), callback_data="schedule:set_interval")
+        builder.button(text=tr.t("btn_set_jitter"), callback_data="schedule:set_jitter")
+        builder.button(
+            text=tr.t("btn_set_paid_stars"),
+            callback_data="schedule:set_paid_stars",
+        )
+        builder.button(
+            text=(
+                tr.t("btn_disable_paid_messages")
+                if settings.allow_paid_messages
+                else tr.t("btn_enable_paid_messages")
+            ),
+            callback_data="schedule:toggle_paid_messages",
+        )
+        builder.button(
+            text=tr.t("btn_disable_sender") if settings.is_active else tr.t("btn_enable_sender"),
+            callback_data="schedule:toggle",
+        )
     builder.button(text=tr.t("btn_back"), callback_data="menu:main")
     builder.adjust(2, 2, 1, 1)
     return builder.as_markup()

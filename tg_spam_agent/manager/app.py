@@ -208,7 +208,11 @@ async def _show_main(target: Message | CallbackQuery, tr: Translator, context: T
         f"Tenant: <code>{context.tenant_id}</code>\n"
         f"Subscription: <b>{html.escape(status)}</b>"
     )
-    markup = build_main_keyboard(tr, show_admin=context.is_platform_admin)
+    markup = build_main_keyboard(
+        tr,
+        show_tenant_admin=context.can_manage,
+        show_platform_admin=context.is_platform_admin,
+    )
     if isinstance(target, CallbackQuery):
         await _safe_edit(target, text, markup)
         await target.answer()
@@ -323,7 +327,7 @@ async def _show_subscriptions(
         text += f"\nLimit: {len(targets)}/{plan.max_targets}"
     if not context.can_mutate:
         text += "\n\nRead-only: subscription is inactive."
-    markup = build_subscriptions_keyboard(targets, tr)
+    markup = build_subscriptions_keyboard(targets, tr, can_mutate=context.can_mutate)
     if isinstance(target, CallbackQuery):
         await _safe_edit(target, text, markup)
         await target.answer()
@@ -347,7 +351,15 @@ async def _show_subscription_detail(
         return
 
     text = f"{tr.t('target_details_title')}\n\n{_subscription_line(target, tr)}"
-    await _safe_edit(callback, text, build_subscription_detail_keyboard(target, tr))
+    await _safe_edit(
+        callback,
+        text,
+        build_subscription_detail_keyboard(
+            target,
+            tr,
+            can_mutate=context.can_mutate,
+        ),
+    )
     await callback.answer()
 
 
@@ -367,7 +379,7 @@ async def _show_messages(
         text += f"\n\nLimit: {len(messages)}/{plan.max_templates}"
     if not context.can_mutate:
         text += "\nRead-only: subscription is inactive."
-    markup = build_messages_keyboard(messages, tr)
+    markup = build_messages_keyboard(messages, tr, can_mutate=context.can_mutate)
     if isinstance(target, CallbackQuery):
         await _safe_edit(target, text, markup)
         await target.answer()
@@ -397,7 +409,7 @@ async def _show_schedule(
     )
     if plan is not None:
         text += f"\nMin interval by plan: {plan.min_interval_minutes} min"
-    markup = build_schedule_keyboard(settings, tr)
+    markup = build_schedule_keyboard(settings, tr, can_mutate=context.can_mutate)
     if isinstance(target, CallbackQuery):
         await _safe_edit(target, text, markup)
         await target.answer()
@@ -466,24 +478,32 @@ async def _show_status(
         else tr.t("status_no_failures")
     )
     subscription_status = snapshot.subscription.status if snapshot.subscription else "inactive"
-    text = (
-        f"{tr.t('status_title')}\n"
-        f"Tenant: <code>{context.tenant_id}</code>\n"
+    lines = [
+        tr.t("status_title"),
         f"Subscription: {html.escape(subscription_status)} until "
-        f"{_dt(snapshot.subscription.current_period_end if snapshot.subscription else None, tr)}\n"
-        f"{tr.t('status_owners')}: {', '.join(str(owner_id) for owner_id in snapshot.owner_ids) or 'none'}\n"
-        f"{tr.t('status_session')}: {html.escape(snapshot.telegram_session.status)}\n"
-        f"{tr.t('status_total_targets')}: {snapshot.counts['total_targets']}\n"
-        f"{tr.t('status_joined_targets')}: {snapshot.counts['joined_targets']}\n"
-        f"{tr.t('status_pending_joins')}: {snapshot.counts['pending_targets']}\n"
-        f"{tr.t('status_active_messages')}: {snapshot.counts['active_messages']}\n"
-        f"{tr.t('status_whitelist_size')}: {snapshot.counts['whitelist_users']}\n"
-        f"{tr.t('status_broadcast_active')}: {snapshot.settings.is_active}\n"
-        f"{tr.t('schedule_last_run')}: {_dt(snapshot.settings.last_broadcast_at, tr)}\n"
-        f"{tr.t('schedule_next_run')}: {_dt(snapshot.settings.next_broadcast_at, tr)}\n\n"
-        f"{tr.t('status_recent_failures')}\n{failure_lines}"
+        f"{_dt(snapshot.subscription.current_period_end if snapshot.subscription else None, tr)}",
+        f"{tr.t('status_total_targets')}: {snapshot.counts['total_targets']}",
+        f"{tr.t('status_joined_targets')}: {snapshot.counts['joined_targets']}",
+        f"{tr.t('status_active_messages')}: {snapshot.counts['active_messages']}",
+        f"{tr.t('status_broadcast_active')}: {snapshot.settings.is_active}",
+        f"{tr.t('schedule_last_run')}: {_dt(snapshot.settings.last_broadcast_at, tr)}",
+        f"{tr.t('schedule_next_run')}: {_dt(snapshot.settings.next_broadcast_at, tr)}",
+    ]
+    if context.can_manage:
+        lines[1:1] = [
+            f"Tenant: <code>{context.tenant_id}</code>",
+            f"{tr.t('status_owners')}: {', '.join(str(owner_id) for owner_id in snapshot.owner_ids) or 'none'}",
+            f"{tr.t('status_session')}: {html.escape(snapshot.telegram_session.status)}",
+            f"{tr.t('status_pending_joins')}: {snapshot.counts['pending_targets']}",
+            f"{tr.t('status_whitelist_size')}: {snapshot.counts['whitelist_users']}",
+        ]
+        lines.extend(["", f"{tr.t('status_recent_failures')}\n{failure_lines}"])
+    text = "\n".join(lines)
+    markup = build_main_keyboard(
+        tr,
+        show_tenant_admin=context.can_manage,
+        show_platform_admin=context.is_platform_admin,
     )
-    markup = build_main_keyboard(tr, show_admin=context.is_platform_admin)
     if isinstance(target, CallbackQuery):
         await _safe_edit(target, text, markup)
         await target.answer()
@@ -535,7 +555,8 @@ def create_manager_router(
             tr.t("action_canceled"),
             reply_markup=build_main_keyboard(
                 tr,
-                show_admin=context.is_platform_admin,
+                show_tenant_admin=context.can_manage,
+                show_platform_admin=context.is_platform_admin,
             ),
         )
 
@@ -557,6 +578,9 @@ def create_manager_router(
         context = await _ensure_callback_access(callback, session_factory, settings)
         if context is None:
             return
+        if not context.can_manage:
+            await callback.answer("Tenant admin only.", show_alert=True)
+            return
         await state.clear()
         tr = await _get_translator(session_factory, settings, callback.from_user.id)
         await _show_account(callback, session_factory, tr, context)
@@ -565,6 +589,9 @@ def create_manager_router(
     async def menu_billing(callback: CallbackQuery, state: FSMContext) -> None:
         context = await _ensure_callback_access(callback, session_factory, settings)
         if context is None:
+            return
+        if not context.can_manage:
+            await callback.answer("Tenant admin only.", show_alert=True)
             return
         await state.clear()
         tr = await _get_translator(session_factory, settings, callback.from_user.id)
@@ -610,6 +637,9 @@ def create_manager_router(
     async def menu_whitelist(callback: CallbackQuery, state: FSMContext) -> None:
         context = await _ensure_callback_access(callback, session_factory, settings)
         if context is None:
+            return
+        if not context.can_manage:
+            await callback.answer("Tenant admin only.", show_alert=True)
             return
         await state.clear()
         tr = await _get_translator(session_factory, settings, callback.from_user.id)
@@ -672,6 +702,9 @@ def create_manager_router(
     async def billing_pay(callback: CallbackQuery) -> None:
         context = await _ensure_callback_access(callback, session_factory, settings)
         if context is None:
+            return
+        if not context.can_manage:
+            await callback.answer("Tenant admin only.", show_alert=True)
             return
         async with session_factory() as session:
             plan = await PlanRepository(session).get_active_plan()
@@ -770,6 +803,9 @@ def create_manager_router(
         context = await _ensure_callback_access(callback, session_factory, settings)
         if context is None:
             return
+        if not context.can_manage:
+            await callback.answer("Tenant admin only.", show_alert=True)
+            return
         if not settings.session_encryption_key:
             await callback.answer("SESSION_ENCRYPTION_KEY is not configured.", show_alert=True)
             return
@@ -865,6 +901,9 @@ def create_manager_router(
     async def account_disconnect(callback: CallbackQuery) -> None:
         context = await _ensure_callback_access(callback, session_factory, settings)
         if context is None:
+            return
+        if not context.can_manage:
+            await callback.answer("Tenant admin only.", show_alert=True)
             return
         tr = await _get_translator(session_factory, settings, callback.from_user.id)
         async with session_factory() as session:
