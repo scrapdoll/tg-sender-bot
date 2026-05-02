@@ -712,15 +712,21 @@ def create_manager_router(
             await callback.answer("No active plan.", show_alert=True)
             return
         payload = BillingRepository.build_payload(context.tenant_id, plan.id)
-        await callback.message.answer_invoice(
-            title=f"{plan.name} subscription",
-            description=f"{plan.max_targets} targets, {plan.max_templates} templates",
-            payload=payload,
-            currency="XTR",
-            prices=[LabeledPrice(label=plan.name, amount=plan.price_stars)],
-            provider_token="",
-            subscription_period=plan.period_seconds,
-        )
+        try:
+            await callback.bot.send_invoice(
+                chat_id=callback.message.chat.id,
+                title=f"{plan.name} subscription",
+                description=f"{plan.max_targets} targets, {plan.max_templates} templates",
+                payload=payload,
+                currency="XTR",
+                prices=[LabeledPrice(label=plan.name, amount=plan.price_stars)],
+                provider_token="",
+                subscription_period=plan.period_seconds,
+            )
+        except TelegramBadRequest as exc:
+            logger.warning("Failed to send Stars invoice for tenant %s: %s", context.tenant_id, exc)
+            await callback.answer(f"Invoice error: {exc.message}", show_alert=True)
+            return
         await callback.answer()
 
     @router.pre_checkout_query()

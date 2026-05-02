@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from random import Random
 
+from aiogram.methods import SendInvoice
+from aiogram.types import LabeledPrice
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from tg_spam_agent.models import Base
@@ -253,3 +255,23 @@ async def test_plan_admin_update_and_billing_payload() -> None:
 
         assert subscription is not None
         assert subscription.status == "active"
+
+
+def test_stars_subscription_invoice_payload_contains_required_fields() -> None:
+    invoice = SendInvoice(
+        chat_id=100,
+        title="Pro subscription",
+        description="100 targets, 10 templates",
+        payload=BillingRepository.build_payload(1, 1),
+        currency="XTR",
+        prices=[LabeledPrice(label="Pro", amount=500)],
+        provider_token="",
+        subscription_period=2_592_000,
+    )
+
+    dumped = invoice.model_dump()
+
+    assert dumped["currency"] == "XTR"
+    assert dumped["provider_token"] == ""
+    assert dumped["subscription_period"] == 2_592_000
+    assert dumped["prices"][0]["amount"] == 500
